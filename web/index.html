@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#07020f">
+  <!-- Applies the saved theme before first paint; the game owns it from then on. -->
+  <script>try{let t=localStorage.getItem('tripos.theme');document.documentElement.setAttribute('data-theme',t==='classic'||t==='night'?t:'neon')}catch(e){}</script>
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="description" content="Tripos: a Blade Runner themed SET card game for phones and tablets. Solo, daily and party modes. Rust and WebAssembly.">
+  <title>TRIPOS</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css?v=1">
+  <link rel="modulepreload" href="pkg/tripos.js?v=1">
+</head>
+<body>
+  <div class="rain" aria-hidden="true"></div>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <!-- Shared stripe patterns for striped cards; the stroke follows the theme's colour tokens. -->
+  <svg class="defs" aria-hidden="true" width="0" height="0" focusable="false">
+    <defs>
+      <pattern id="stripe-0" width="5" height="5" patternUnits="userSpaceOnUse"><line class="c0" x1="0" y1="1" x2="5" y2="1"/></pattern>
+      <pattern id="stripe-1" width="5" height="5" patternUnits="userSpaceOnUse"><line class="c1" x1="0" y1="1" x2="5" y2="1"/></pattern>
+      <pattern id="stripe-2" width="5" height="5" patternUnits="userSpaceOnUse"><line class="c2" x1="0" y1="1" x2="5" y2="1"/></pattern>
+    </defs>
+  </svg>
+
+  <main class="app" id="app" data-mode="solo">
+    <div class="party-side party-top" id="party-top" aria-label="Players across the table"></div>
+
+    <header class="hud">
+      <div class="title-block">
+        <h1 class="title" data-text="TRIPOS">TRIPOS</h1>
+        <p class="tagline" id="tagline">ALL THE SAME OR ALL DIFFERENT</p>
+      </div>
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-label" id="stat-a-label">TIME</span>
+          <span class="stat-value" id="stat-a">0:00</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label" id="stat-b-label">SETS</span>
+          <span class="stat-value" id="stat-b">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label" id="stat-c-label">DECK</span>
+          <span class="stat-value" id="stat-c">69</span>
+        </div>
+        <button class="btn btn-icon" type="button" data-act="rules" aria-label="How to play">?</button>
+      </div>
+    </header>
+
+    <section class="controls">
+      <button class="btn" id="hint" type="button" data-act="hint">HINT</button>
+      <div class="seg seg-players" id="seg-players" role="radiogroup" aria-label="Number of players" hidden>
+        <button class="seg-btn" type="button" role="radio" data-act="players" data-n="2" aria-checked="true">2</button>
+        <button class="seg-btn" type="button" role="radio" data-act="players" data-n="3" aria-checked="false">3</button>
+        <button class="seg-btn" type="button" role="radio" data-act="players" data-n="4" aria-checked="false">4</button>
+      </div>
+      <p class="status-line" id="status-line">TAP THREE CARDS THAT MAKE A SET</p>
+      <button class="btn" id="deal" type="button" data-act="deal">DEAL 3</button>
+      <button class="btn btn-primary" id="new-game" type="button" data-act="new">NEW DEAL</button>
+    </section>
+
+    <section class="table-wrap">
+      <div class="table" id="table" role="grid" aria-label="Cards on the table"></div>
+
+      <div class="overlay" id="overlay" hidden>
+        <p class="overlay-kicker" id="overlay-kicker"></p>
+        <h2 class="overlay-title" id="overlay-title"></h2>
+        <div class="overlay-sub" id="overlay-sub"></div>
+        <div class="overlay-actions">
+          <button class="btn" id="overlay-secondary" type="button" data-act="overlay-secondary" hidden>SHARE</button>
+          <button class="btn btn-primary" id="overlay-primary" type="button" data-act="overlay-primary">NEW DEAL</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="party-side party-bottom" id="party-bottom" aria-label="Players on this side"></div>
+
+    <!-- Player bars start here and are moved to a side by the game. -->
+    <div hidden id="party-pool">
+      <button class="pbar p0" type="button" data-act="buzz" data-p="0" id="pbar-0"><span class="pname">P1</span><span class="pscore">0</span><span class="pclock"></span></button>
+      <button class="pbar p1" type="button" data-act="buzz" data-p="1" id="pbar-1"><span class="pname">P2</span><span class="pscore">0</span><span class="pclock"></span></button>
+      <button class="pbar p2" type="button" data-act="buzz" data-p="2" id="pbar-2"><span class="pname">P3</span><span class="pscore">0</span><span class="pclock"></span></button>
+      <button class="pbar p3" type="button" data-act="buzz" data-p="3" id="pbar-3"><span class="pname">P4</span><span class="pscore">0</span><span class="pclock"></span></button>
+    </div>
+
+    <footer class="foot">
+      <p class="sr-only" id="status" aria-live="polite"></p>
+      <div class="foot-switches">
+        <div class="seg seg-modes" role="radiogroup" aria-label="Game mode">
+          <button class="seg-btn" id="mode-solo" type="button" role="radio" data-act="mode" data-mode="solo" aria-checked="true">SOLO</button>
+          <button class="seg-btn party" id="mode-party" type="button" role="radio" data-act="mode" data-mode="party" aria-checked="false">PARTY</button>
+          <button class="seg-btn daily" id="mode-daily" type="button" role="radio" data-act="mode" data-mode="daily" aria-checked="false">DAILY</button>
+        </div>
+        <div class="seg seg-theme" role="radiogroup" aria-label="Theme">
+          <button class="seg-btn" id="theme-neon" type="button" role="radio" data-act="theme" data-theme="neon" aria-checked="true">NEON</button>
+          <button class="seg-btn" id="theme-classic" type="button" role="radio" data-act="theme" data-theme="classic" aria-checked="false">CLASSIC</button>
+          <button class="seg-btn" id="theme-night" type="button" role="radio" data-act="theme" data-theme="night" aria-checked="false">NIGHT</button>
+        </div>
+      </div>
+      <p class="foot-line">WALLACE CORP. &middot; PATTERN RECOGNITION UNIT &middot; LOS ANGELES 2049</p>
+    </footer>
+  </main>
+
+  <script type="module">
+    import init, * as tripos from './pkg/tripos.js?v=1';
+    window.Tripos = tripos;
+    // The module path carries the same version as the glue so a cached binary never pairs with new glue.
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=1' }).catch(function (e) { console.error('Tripos failed to start', e); });
+  </script>
+</body>
+</html>

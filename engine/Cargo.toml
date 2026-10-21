@@ -1,0 +1,8 @@
+[package]
+name = "tripos-engine"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "SET rules, deck, board and daily seeding with no dependencies"
+
+[dependencies]
