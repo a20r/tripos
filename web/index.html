@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=2">
-  <link rel="modulepreload" href="pkg/tripos.js?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
+  <link rel="modulepreload" href="pkg/tripos.js?v=3">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -114,10 +114,10 @@
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=2';
+    import init, * as tripos from './pkg/tripos.js?v=3';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=2' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=3' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>
