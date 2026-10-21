@@ -314,6 +314,7 @@ body {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  container-type: size;
 }
 .table {
   --cols: 3;
@@ -324,6 +325,20 @@ body {
   gap: var(--gap);
   width: 100%;
   height: 100%;
+  justify-content: center;
+  align-content: center;
+}
+/* Cells take the card's 8:5 shape, as large as the width or height allows, and the
+   block sits centred so the cards stay tight however much room is left over. */
+@supports (width: 1cqw) {
+  .table {
+    --cw: min(
+      calc((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols)),
+      calc((100cqh - (var(--rows) - 1) * var(--gap)) / var(--rows) * 1.6)
+    );
+    grid-template-columns: repeat(var(--cols), var(--cw));
+    grid-template-rows: repeat(var(--rows), calc(var(--cw) / 1.6));
+  }
 }
 
 .card {
