@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
-use tripos_engine::{daily, Card, Claim, Game, Rng};
+use tripos_engine::{daily, Card, Claim, Game, Rng, Stats};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -32,6 +32,12 @@ const TICK_MS: i32 = 100;
 const MIDDOT: &str = " \u{b7} ";
 /// Keyboard row mapped onto table positions, for desktop play.
 const KEY_ROW: &str = "qwertyuiasdfghjkzxcvbnm";
+/// A category needs this many observations before the profile calls it a lean or a miss.
+const MIN_SEEN: u32 = 6;
+/// A lean or miss needs this much distance from the overall take rate, in rate points.
+const MIN_BIAS: f64 = 0.08;
+/// Fastest and slowest kinds need this many finds.
+const MIN_FOUND: u32 = 3;
 const PLAYER_NAMES: [&str; 4] = ["P1", "P2", "P3", "P4"];
 const WIN_LINES: [&str; 4] = [
     "MORE HUMAN THAN HUMAN",
@@ -140,6 +146,8 @@ struct Timed {
     penalty: u32,
     hints: u32,
     over: bool,
+    /// Play time when the table last changed, so a find can be timed.
+    mark: u32,
 }
 
 impl Timed {
@@ -152,7 +160,22 @@ impl Timed {
             penalty: 0,
             hints: 0,
             over: false,
+            mark: 0,
         }
+    }
+
+    /// Time spent looking, with penalties taken back out.
+    fn play_ms(&self) -> u32 {
+        self.total().saturating_sub(self.penalty)
+    }
+
+    fn mark_table(&mut self) {
+        self.mark = self.play_ms();
+    }
+
+    /// How long the current table has been in front of the player.
+    fn search_ms(&self) -> u32 {
+        self.play_ms().saturating_sub(self.mark)
     }
 
     fn total(&self) -> u32 {
@@ -217,6 +240,7 @@ impl Timed {
             penalty: s.penalty,
             hints: s.hints,
             over: s.over,
+            mark: s.elapsed.saturating_sub(s.penalty),
         })
     }
 }
@@ -252,6 +276,10 @@ struct Els {
     hint: HtmlButtonElement,
     deal: HtmlButtonElement,
     shuffle: HtmlButtonElement,
+    stats_btn: HtmlButtonElement,
+    table_wrap: HtmlElement,
+    stats_panel: HtmlElement,
+    stats_body: HtmlElement,
     new_game: HtmlButtonElement,
     seg_players: HtmlElement,
     mode_btns: [HtmlButtonElement; 3],
@@ -293,6 +321,11 @@ pub struct App {
     tick_timer: Option<i32>,
     overlay: Overlay,
     shown_time: u32,
+    stats: Stats,
+    /// The table is flipped over to show the play profile.
+    stats_open: bool,
+    /// Reset asks for a second tap.
+    reset_armed: bool,
 }
 
 pub fn boot() {
@@ -311,6 +344,10 @@ pub fn boot() {
         hint: dom::btn("hint"),
         deal: dom::btn("deal"),
         shuffle: dom::btn("shuffle"),
+        stats_btn: dom::btn("stats-btn"),
+        table_wrap: dom::el("table-wrap"),
+        stats_panel: dom::el("stats-panel"),
+        stats_body: dom::el("stats-body"),
         new_game: dom::btn("new-game"),
         seg_players: dom::el("seg-players"),
         mode_btns: [
@@ -371,6 +408,9 @@ pub fn boot() {
         tick_timer: None,
         overlay: Overlay::None,
         shown_time: u32::MAX,
+        stats: Stats::default(),
+        stats_open: false,
+        reset_armed: false,
     }));
     {
         let mut a = app.borrow_mut();
@@ -394,6 +434,9 @@ pub fn boot() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
     a.history = parse(dom::local_get(DAILY_HIST_KEY)).unwrap_or_default();
+    a.stats = parse::<StatsSave>(dom::local_get(STATS_KEY))
+        .map(StatsSave::into_stats)
+        .unwrap_or_default();
     let theme = dom::local_get(THEME_KEY).unwrap_or_default();
     a.set_theme(Theme::from_key(&theme), true);
     a.arrange_bars();
@@ -550,8 +593,11 @@ impl App {
             );
         }
         if !boot {
-            // Card labels name colours, so they follow the theme.
+            // Card labels and the profile name colours, so they follow the theme.
             self.render_table();
+            if self.stats_open {
+                self.render_profile();
+            }
             self.announce(t.label());
         }
     }
@@ -567,6 +613,7 @@ impl App {
         }
         self.save();
         self.cancel_pending();
+        self.close_stats();
         self.locked = false;
         self.selected.clear();
         self.hinted.clear();
@@ -651,6 +698,7 @@ impl App {
 
     fn new_game(&mut self) {
         self.cancel_pending();
+        self.close_stats();
         self.locked = false;
         self.selected.clear();
         self.hinted.clear();
@@ -692,12 +740,17 @@ impl App {
         dom::local_set(PARTY_PLAYERS_KEY, &self.party.players.to_string());
     }
 
+    fn save_stats(&self) {
+        dom::local_set(STATS_KEY, &to_json(&StatsSave::from_stats(&self.stats)));
+    }
+
     // ---------- clock ----------
 
     /// Runs the clock only while a timed, unfinished game is on screen.
     fn sync_clock(&mut self) {
         let run = self.mode.is_timed()
             && self.overlay == Overlay::None
+            && !self.stats_open
             && !dom::page_hidden()
             && !self.is_over();
         if let Some(t) = self.timed_mut() {
@@ -938,7 +991,8 @@ impl App {
             "<li><b>Solo</b> and <b>Daily</b>: clear the deck against the clock. Wrong pick +10s, hint +15s, dealing while a set is out +15s.</li>",
             "<li><b>Party</b>: tap your bar to call a set, then pick three within seven seconds. Right +1, wrong or late &minus;1.</li>",
             "<li>The shuffle button rearranges the table to give you a fresh look. It is free.</li>",
-            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>1</b> to <b>4</b> call.</li>",
+            "<li>The profile button flips the table over to show which kinds of set you take and which you pass over, across all your Solo and Daily games.</li>",
+            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>P</b> profile, <b>1</b> to <b>4</b> call.</li>",
             "</ul>"
         );
         self.show_overlay(
@@ -1060,6 +1114,8 @@ impl App {
             "hint" => self.hint(),
             "deal" => self.deal(),
             "shuffle" => self.shuffle(),
+            "stats" => self.toggle_stats(),
+            "stats-reset" => self.reset_stats(),
             "new" => self.new_game(),
             "rules" => self.rules(),
             "buzz" => {
@@ -1087,7 +1143,9 @@ impl App {
         let k = key.to_ascii_lowercase();
         match k.as_str() {
             "escape" => {
-                if self.overlay != Overlay::None {
+                if self.stats_open {
+                    self.close_stats();
+                } else if self.overlay != Overlay::None {
                     if self.overlay == Overlay::Rules {
                         self.close_overlay();
                     }
@@ -1103,6 +1161,7 @@ impl App {
                 }
             }
             "t" => self.set_theme(self.theme.next(), false),
+            "p" => self.toggle_stats(),
             "n" => self.new_game(),
             "h" => self.hint(),
             "d" => self.deal(),
@@ -1124,7 +1183,7 @@ impl App {
     }
 
     fn on_card(&mut self, i: usize) {
-        if self.locked || self.overlay != Overlay::None || self.is_over() {
+        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
             return;
         }
         if i >= self.game().table().len() {
@@ -1171,6 +1230,8 @@ impl App {
                     if let Some(t) = self.timed_mut() {
                         t.penalize(WRONG_MS);
                     }
+                    self.stats.wrong += 1;
+                    self.save_stats();
                     format!("NOT A SET{MIDDOT}{}", fmt_secs(WRONG_MS))
                 }
             };
@@ -1191,7 +1252,26 @@ impl App {
 
     fn finish_set(&mut self, idx: [usize; 3]) {
         let before: HashSet<Card> = self.game().table().iter().copied().collect();
+        if self.mode.is_timed() {
+            // Profile the claim against every set that was out at that moment.
+            let (sets, claimed) = {
+                let table = self.game().table();
+                let sets: Vec<[Card; 3]> = self
+                    .game()
+                    .sets()
+                    .iter()
+                    .map(|s| [table[s[0]], table[s[1]], table[s[2]]])
+                    .collect();
+                (sets, [table[idx[0]], table[idx[1]], table[idx[2]]])
+            };
+            let ms = self.timed().map(|t| t.search_ms()).unwrap_or(0);
+            self.stats.record_claim(&sets, claimed, ms);
+            self.save_stats();
+        }
         let result = self.game_mut().claim(idx);
+        if let Some(t) = self.timed_mut() {
+            t.mark_table();
+        }
         self.selected.clear();
         self.hinted.clear();
         self.locked = false;
@@ -1277,6 +1357,8 @@ impl App {
             t.hints += 1;
             t.penalize(HINT_MS);
         }
+        self.stats.hints += 1;
+        self.save_stats();
         self.refresh_marks();
         self.say(&format!("HINT{MIDDOT}{}", fmt_secs(HINT_MS)));
         self.save();
@@ -1284,7 +1366,7 @@ impl App {
 
     /// Rearranges the table for a fresh look. Selection and hints follow their cards.
     fn shuffle(&mut self) {
-        if self.locked || self.overlay != Overlay::None || self.is_over() {
+        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
             return;
         }
         if self.mode == Mode::Party && self.party.holder.is_some() {
@@ -1306,7 +1388,7 @@ impl App {
     }
 
     fn deal(&mut self) {
-        if self.locked || self.overlay != Overlay::None || self.is_over() {
+        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
             return;
         }
         if self.mode == Mode::Party && self.party.holder.is_some() {
@@ -1319,6 +1401,18 @@ impl App {
                     if let Some(t) = self.timed_mut() {
                         t.penalize(BAD_DEAL_MS);
                     }
+                    // Calling no set while sets are out: every one of them was missed.
+                    let sets: Vec<[Card; 3]> = {
+                        let table = self.game().table();
+                        self.game()
+                            .sets()
+                            .iter()
+                            .map(|s| [table[s[0]], table[s[1]], table[s[2]]])
+                            .collect()
+                    };
+                    self.stats.record_passed(&sets);
+                    self.stats.bad_deals += 1;
+                    self.save_stats();
                     format!("A SET IS OUT THERE{MIDDOT}{}", fmt_secs(BAD_DEAL_MS))
                 }
             };
@@ -1328,6 +1422,9 @@ impl App {
         }
         let before: HashSet<Card> = self.game().table().iter().copied().collect();
         if self.game_mut().deal_three() {
+            if let Some(t) = self.timed_mut() {
+                t.mark_table();
+            }
             self.fresh = self
                 .game()
                 .table()
@@ -1379,6 +1476,228 @@ impl App {
         self.render_all();
         self.say(&format!("{n} PLAYERS{MIDDOT}NEW GAME"));
         self.save();
+    }
+
+    // ---------- play profile ----------
+
+    fn toggle_stats(&mut self) {
+        if self.stats_open {
+            self.close_stats();
+        } else {
+            self.open_stats();
+        }
+    }
+
+    /// Flips the table over to the profile. The clock pauses while it shows.
+    fn open_stats(&mut self) {
+        if self.locked || self.stats_open {
+            return;
+        }
+        self.stats_open = true;
+        self.reset_armed = false;
+        self.render_profile();
+        dom::set_class(&self.els.table_wrap, "flipped", true);
+        let _ = self.els.stats_btn.set_attribute("aria-pressed", "true");
+        let _ = self.els.table.set_attribute("aria-hidden", "true");
+        let _ = self.els.stats_panel.set_attribute("aria-hidden", "false");
+        // A finished-game card would cover the profile; it comes back on close.
+        dom::set_hidden(&self.els.overlay, true);
+        self.announce("Play profile shown.");
+        self.sync_clock();
+    }
+
+    fn close_stats(&mut self) {
+        if !self.stats_open {
+            return;
+        }
+        self.stats_open = false;
+        self.reset_armed = false;
+        dom::set_class(&self.els.table_wrap, "flipped", false);
+        let _ = self.els.stats_btn.set_attribute("aria-pressed", "false");
+        let _ = self.els.table.set_attribute("aria-hidden", "false");
+        let _ = self.els.stats_panel.set_attribute("aria-hidden", "true");
+        dom::set_hidden(&self.els.overlay, self.overlay == Overlay::None);
+        self.announce("Table shown.");
+        self.sync_clock();
+    }
+
+    /// First tap arms, second tap clears the lifetime profile.
+    fn reset_stats(&mut self) {
+        if !self.reset_armed {
+            self.reset_armed = true;
+            self.render_profile();
+            return;
+        }
+        self.stats = Stats::default();
+        self.reset_armed = false;
+        self.save_stats();
+        self.render_profile();
+        self.announce("Profile reset.");
+    }
+
+    fn cat_label(&self, key: &str) -> String {
+        let names = self.theme.color_names();
+        let (k, v) = key.split_at(1);
+        let label = match (k, v) {
+            ("d", "1") => "ONLY 1 DIFFERS",
+            ("d", "2") => "2 DIFFER",
+            ("d", "3") => "3 DIFFER",
+            ("d", _) => "ALL 4 DIFFER",
+            ("n", "0") => "ALL SINGLES",
+            ("n", "1") => "ALL PAIRS",
+            ("n", "2") => "ALL TRIPLES",
+            ("n", _) => "MIXED COUNTS",
+            ("s", "0") => "ALL DIAMONDS",
+            ("s", "1") => "ALL PILLS",
+            ("s", "2") => "ALL SQUIGGLES",
+            ("s", _) => "MIXED SHAPES",
+            ("c", "0") => return format!("ALL {}", names[0].to_uppercase()),
+            ("c", "1") => return format!("ALL {}", names[1].to_uppercase()),
+            ("c", "2") => return format!("ALL {}", names[2].to_uppercase()),
+            ("c", _) => "MIXED COLOURS",
+            ("h", "0") => "ALL SOLID",
+            ("h", "1") => "ALL STRIPED",
+            ("h", "2") => "ALL OPEN",
+            _ => "MIXED SHADING",
+        };
+        label.to_string()
+    }
+
+    /// Builds the report on the back of the table.
+    fn render_profile(&mut self) {
+        const SECTIONS: [(&str, [&str; 4]); 5] = [
+            ("HOW MANY ATTRIBUTES DIFFER", ["d1", "d2", "d3", "d4"]),
+            ("COLOUR", ["c0", "c1", "c2", "cx"]),
+            ("SHAPE", ["s0", "s1", "s2", "sx"]),
+            ("COUNT", ["n0", "n1", "n2", "nx"]),
+            ("SHADING", ["h0", "h1", "h2", "hx"]),
+        ];
+        let st = &self.stats;
+        let overall = st.overall_rate().unwrap_or(0.0);
+        let pct = |r: f64| (r * 100.0).round() as u32;
+        let plural =
+            |n: u32, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let secs = |ms: u32| format!("{:.1}S", ms as f64 / 1000.0);
+
+        let biases = st.biases(MIN_SEEN);
+        let leans: Vec<&tripos_engine::Bias> = biases
+            .iter()
+            .filter(|b| b.bias >= MIN_BIAS)
+            .take(2)
+            .collect();
+        let misses: Vec<&tripos_engine::Bias> = biases
+            .iter()
+            .rev()
+            .filter(|b| b.bias <= -MIN_BIAS)
+            .take(2)
+            .collect();
+        let timed: Vec<(&String, u32)> = st
+            .cats
+            .iter()
+            .filter(|(_, t)| t.found >= MIN_FOUND)
+            .filter_map(|(k, t)| t.avg_ms().map(|ms| (k, ms)))
+            .collect();
+        let fastest = timed.iter().min_by_key(|(_, ms)| *ms).copied();
+        let slowest = timed.iter().max_by_key(|(_, ms)| *ms).copied();
+
+        let mut h = String::with_capacity(6000);
+        h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE&nbsp;&middot;&nbsp;SOLO AND DAILY</p>"#);
+        h.push_str(r#"<h2 class="st-title">BASELINE REPORT</h2>"#);
+        if st.found == 0 {
+            h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
+        } else {
+            h.push_str(&format!(
+                r#"<p class="st-sum">{} FOUND{MIDDOT}{} PASSED OVER{MIDDOT}TAKE RATE {}%{MIDDOT}AVG FIND {}</p>"#,
+                plural(st.found, "SET", "SETS"),
+                st.seen.saturating_sub(st.found),
+                pct(overall),
+                st.avg_ms().map(secs).unwrap_or_else(|| "-".into())
+            ));
+            h.push_str(&format!(
+                r#"<p class="st-sum st-dim">{}{MIDDOT}{}{MIDDOT}{}</p>"#,
+                plural(st.wrong, "WRONG PICK", "WRONG PICKS"),
+                plural(st.hints, "HINT", "HINTS"),
+                plural(st.bad_deals, "EARLY DEAL", "EARLY DEALS")
+            ));
+        }
+        if st.found < 5 {
+            h.push_str(r#"<p class="st-note st-warn">NOT MUCH DATA YET. THE REPORT SHARPENS AFTER A FEW DECKS OF SOLO OR DAILY.</p>"#);
+        }
+
+        let describe = |b: &tripos_engine::Bias| {
+            format!(
+                "<b>{}</b> {}% <span class=\"st-dim\">({}/{})</span>",
+                self.cat_label(&b.key),
+                pct(b.rate),
+                b.tally.found,
+                b.tally.seen
+            )
+        };
+        let join = |v: &[&tripos_engine::Bias]| {
+            if v.is_empty() {
+                "NO CLEAR LEAN YET".to_string()
+            } else {
+                v.iter()
+                    .map(|b| describe(b))
+                    .collect::<Vec<_>>()
+                    .join(MIDDOT)
+            }
+        };
+        h.push_str(r#"<div class="st-verdicts">"#);
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">YOU LEAN TOWARD</span>{}</p>"#,
+            join(&leans)
+        ));
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">YOU TEND TO MISS</span>{}</p>"#,
+            join(&misses)
+        ));
+        let speed = match (fastest, slowest) {
+            (Some((fk, fm)), Some((sk, sm))) if fk != sk => format!(
+                "<b>{}</b> {}{MIDDOT}SLOWEST <b>{}</b> {}",
+                self.cat_label(fk),
+                secs(fm),
+                self.cat_label(sk),
+                secs(sm)
+            ),
+            _ => "NOT ENOUGH TIMED FINDS YET".to_string(),
+        };
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">FASTEST FINDS</span>{speed}</p>"#
+        ));
+        h.push_str("</div>");
+
+        h.push_str(r#"<div class="st-grid">"#);
+        for (title, keys) in SECTIONS {
+            h.push_str(&format!(r#"<section class="st-sec"><h3>{title}</h3>"#));
+            for key in keys {
+                let t = st.cats.get(key).copied().unwrap_or_default();
+                let cls = if leans.iter().any(|b| b.key == key) {
+                    " lean"
+                } else if misses.iter().any(|b| b.key == key) {
+                    " miss"
+                } else {
+                    ""
+                };
+                let (w, num) = match t.rate() {
+                    Some(r) => (pct(r), format!("{}/{}", t.found, t.seen)),
+                    None => (0, "-".to_string()),
+                };
+                h.push_str(&format!(
+                    r#"<div class="st-row{cls}"><span class="st-label">{}</span><span class="st-bar" style="--w:{w}%;--m:{}%"><i></i><b></b></span><span class="st-num">{num}</span></div>"#,
+                    self.cat_label(key),
+                    pct(overall)
+                ));
+            }
+            h.push_str("</section>");
+        }
+        h.push_str("</div>");
+        h.push_str(r#"<p class="st-note">BAR: HOW OFTEN YOU TAKE THAT KIND OF SET WHEN IT IS ON THE TABLE. LINE: YOUR OVERALL RATE. A SET IS PASSED OVER WHEN IT WAS OUT AND YOU TOOK A DIFFERENT ONE.</p>"#);
+        h.push_str(&format!(
+            r#"<div class="st-actions"><button class="btn btn-primary" type="button" data-act="stats">BACK TO THE TABLE</button><button class="btn" type="button" data-act="stats-reset">{}</button></div>"#,
+            if self.reset_armed { "SURE? TAP AGAIN" } else { "RESET PROFILE" }
+        ));
+        self.els.stats_body.set_inner_html(&h);
     }
 
     // ---------- deferred work ----------

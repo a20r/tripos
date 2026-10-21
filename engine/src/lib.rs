@@ -8,7 +8,9 @@ pub mod card;
 pub mod daily;
 pub mod game;
 pub mod rng;
+pub mod stats;
 
 pub use card::{find_sets, has_set, is_set, third, Card, DECK_SIZE};
 pub use game::{Claim, Game, TABLE_MAX, TABLE_MIN};
 pub use rng::Rng;
+pub use stats::{Bias, Signature, Stats, Tally};

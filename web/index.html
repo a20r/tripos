@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=3">
-  <link rel="modulepreload" href="pkg/tripos.js?v=3">
+  <link rel="stylesheet" href="style.css?v=4">
+  <link rel="modulepreload" href="pkg/tripos.js?v=4">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -68,11 +68,19 @@
       <button class="btn btn-icon" id="shuffle" type="button" data-act="shuffle" aria-label="Shuffle the cards on the table" title="Shuffle">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
       </button>
+      <button class="btn btn-icon" id="stats-btn" type="button" data-act="stats" aria-label="Show your play profile" aria-pressed="false" title="Play profile">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 20V11"/><path d="M12 20V4"/><path d="M19 20v-7"/><path d="M2 20h20"/></svg>
+      </button>
       <button class="btn btn-primary" id="new-game" type="button" data-act="new">NEW DEAL</button>
     </section>
 
-    <section class="table-wrap">
-      <div class="table" id="table" role="grid" aria-label="Cards on the table"></div>
+    <section class="table-wrap" id="table-wrap">
+      <div class="flip">
+        <div class="table" id="table" role="grid" aria-label="Cards on the table"></div>
+        <div class="stats-panel" id="stats-panel" aria-hidden="true" aria-label="Your play profile">
+          <div class="stats-body" id="stats-body"></div>
+        </div>
+      </div>
 
       <div class="overlay" id="overlay" hidden>
         <p class="overlay-kicker" id="overlay-kicker"></p>
@@ -114,10 +122,10 @@
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=3';
+    import init, * as tripos from './pkg/tripos.js?v=4';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=3' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=4' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>

@@ -37,6 +37,14 @@ them):
 The shuffle button next to `DEAL 3` rearranges the cards on the table, which
 can make a hidden set easier to spot. It is free in every mode.
 
+The profile button (bar chart, `P`) flips the table over to show how you
+play across every Solo and Daily deck: for each kind of set (how many
+attributes differ, all one colour or mixed, and the same for shape, count and
+shading) how often you take it when it is on the table, which kinds you lean
+toward, which you tend to miss, and which you find fastest. A set counts as
+passed over when it was out and you took a different one, or you dealt while
+it was out. The profile is kept on the device and can be reset from the panel.
+
 The choice of theme is remembered and applied before the first paint. Games in
 progress are saved too.
 
