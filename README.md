@@ -34,7 +34,10 @@ them):
 - **Night**: an ultra-dark mode for bedtime. Pure black, dim warm tones, no
   glow or flicker.
 
-The choice is remembered and applied before the first paint. Games in
+The shuffle button next to `DEAL 3` rearranges the cards on the table, which
+can make a hidden set easier to spot. It is free in every mode.
+
+The choice of theme is remembered and applied before the first paint. Games in
 progress are saved too.
 
 Keys for desktop play: letters on the `qwerty` rows pick cards, `H` hint,

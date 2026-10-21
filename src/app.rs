@@ -251,6 +251,7 @@ struct Els {
     tagline: HtmlElement,
     hint: HtmlButtonElement,
     deal: HtmlButtonElement,
+    shuffle: HtmlButtonElement,
     new_game: HtmlButtonElement,
     seg_players: HtmlElement,
     mode_btns: [HtmlButtonElement; 3],
@@ -309,6 +310,7 @@ pub fn boot() {
         tagline: dom::el("tagline"),
         hint: dom::btn("hint"),
         deal: dom::btn("deal"),
+        shuffle: dom::btn("shuffle"),
         new_game: dom::btn("new-game"),
         seg_players: dom::el("seg-players"),
         mode_btns: [
@@ -790,9 +792,9 @@ impl App {
             );
         }
         dom::set_class(&self.els.table, "armed", self.party.holder.is_some());
-        self.els
-            .deal
-            .set_disabled(self.mode == Mode::Party && self.party.holder.is_some());
+        let calling = self.mode == Mode::Party && self.party.holder.is_some();
+        self.els.deal.set_disabled(calling);
+        self.els.shuffle.set_disabled(calling);
         let sel = match self.party.holder {
             Some(p) if self.mode == Mode::Party => format!("var(--p{p})"),
             _ => "var(--sel-default)".to_string(),
@@ -935,6 +937,7 @@ impl App {
             "<li>Three cards are a <b>set</b> when each of those four is <b>all the same</b> or <b>all different</b> across the three.</li>",
             "<li><b>Solo</b> and <b>Daily</b>: clear the deck against the clock. Wrong pick +10s, hint +15s, dealing while a set is out +15s.</li>",
             "<li><b>Party</b>: tap your bar to call a set, then pick three within seven seconds. Right +1, wrong or late &minus;1.</li>",
+            "<li>The shuffle button rearranges the table to give you a fresh look. It is free.</li>",
             "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>1</b> to <b>4</b> call.</li>",
             "</ul>"
         );
@@ -1056,6 +1059,7 @@ impl App {
             }
             "hint" => self.hint(),
             "deal" => self.deal(),
+            "shuffle" => self.shuffle(),
             "new" => self.new_game(),
             "rules" => self.rules(),
             "buzz" => {
@@ -1275,6 +1279,29 @@ impl App {
         }
         self.refresh_marks();
         self.say(&format!("HINT{MIDDOT}{}", fmt_secs(HINT_MS)));
+        self.save();
+    }
+
+    /// Rearranges the table for a fresh look. Selection and hints follow their cards.
+    fn shuffle(&mut self) {
+        if self.locked || self.overlay != Overlay::None || self.is_over() {
+            return;
+        }
+        if self.mode == Mode::Party && self.party.holder.is_some() {
+            return;
+        }
+        let table = self.game().table().to_vec();
+        let selected: Vec<Card> = self.selected.iter().map(|&i| table[i]).collect();
+        let hinted: Vec<Card> = self.hinted.iter().map(|&i| table[i]).collect();
+        self.game_mut()
+            .shuffle_table(&mut Rng::new(dom::random_seed()));
+        let table = self.game().table().to_vec();
+        let at = |c: &Card| table.iter().position(|t| t == c);
+        self.selected = selected.iter().filter_map(at).collect();
+        self.hinted = hinted.iter().filter_map(at).collect();
+        self.fresh = table.iter().copied().collect();
+        self.render_table();
+        self.say("SHUFFLED");
         self.save();
     }
 
