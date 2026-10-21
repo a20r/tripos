@@ -1,7 +1,7 @@
 //! One game of SET: a shuffled deck, the cards on the table, and the rules for
-//! claiming a set and dealing more. The table always shows at least twelve
-//! cards and at least one set while the deck can provide it; three more cards
-//! are dealt whenever a set runs out.
+//! claiming a set and dealing more. The table tops up to twelve cards while
+//! the deck lasts; three more are dealt only on request, so spotting that no
+//! set is out stays part of the game.
 
 use crate::card::{find_sets, full_deck, has_set, is_set, Card};
 use crate::rng::Rng;
@@ -74,17 +74,17 @@ impl Game {
         self.deck.is_empty() && !self.has_set()
     }
 
-    /// Deals up to the minimum and then three at a time until a set is present.
+    /// Deals up to the minimum table size.
     fn fill(&mut self) {
         while self.table.len() < TABLE_MIN && !self.deck.is_empty() {
             self.table.push(self.deck.pop().unwrap());
         }
-        while !self.has_set() && self.table.len() < TABLE_MAX && self.deck.len() >= 3 {
-            self.deal_three_unchecked();
-        }
     }
 
-    fn deal_three_unchecked(&mut self) -> bool {
+    /// Deals three more cards on request. Returns false when the deck is short
+    /// or the table is full. Callers decide whether the request was justified
+    /// (see `has_set`), since the penalty is a scoring matter.
+    pub fn deal_three(&mut self) -> bool {
         if self.deck.len() < 3 || self.table.len() + 3 > TABLE_MAX {
             return false;
         }
@@ -92,13 +92,6 @@ impl Game {
             self.table.push(self.deck.pop().unwrap());
         }
         true
-    }
-
-    /// Deals three more cards on request. Returns false when the deck is short
-    /// or the table is full. Callers decide whether the request was justified
-    /// (see `has_set`), since the penalty is a scoring matter.
-    pub fn deal_three(&mut self) -> bool {
-        self.deal_three_unchecked()
     }
 
     /// Claims three table positions as a set. On success the cards leave the
@@ -135,11 +128,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn opening_table_has_a_set() {
+    fn opening_table_is_twelve() {
         for seed in 0..200 {
             let g = Game::new(&mut Rng::new(seed));
-            assert!(g.table.len() >= TABLE_MIN);
-            assert!(g.has_set() || g.deck.is_empty());
+            assert_eq!(g.table.len(), TABLE_MIN);
             assert_eq!(g.table.len() + g.deck.len(), 81);
         }
     }
@@ -188,20 +180,34 @@ mod tests {
     }
 
     #[test]
-    fn oversized_table_shrinks_back() {
-        // Deal three extra, then claim a set: the table should return to its earlier size.
+    fn claims_never_grow_the_table() {
         for seed in 0..100 {
             let mut g = Game::new(&mut Rng::new(seed));
+            while !g.has_set() {
+                assert!(g.deal_three());
+            }
             let before = g.table.len();
-            assert!(g.deal_three());
-            assert_eq!(g.table.len(), before + 3);
             let sets = g.sets();
             assert_eq!(g.claim(sets[0]), Claim::Set);
-            // Back to the earlier size, unless those cards held no set and three more were dealt.
-            if g.table.len() != before {
-                assert_eq!(g.table.len(), before + 3);
-                assert!(!has_set(&g.table[..before]));
-            }
+            // Replaced in place at twelve, removed above it.
+            let want = if before > TABLE_MIN {
+                before - 3
+            } else {
+                TABLE_MIN
+            };
+            assert_eq!(g.table.len(), want);
         }
+    }
+
+    #[test]
+    fn oversized_table_shrinks_back() {
+        let mut g = Game::new(&mut Rng::new(3));
+        assert!(g.deal_three());
+        assert!(g.deal_three());
+        assert_eq!(g.table.len(), 18);
+        let sets = g.sets();
+        assert!(!sets.is_empty());
+        assert_eq!(g.claim(sets[0]), Claim::Set);
+        assert_eq!(g.table.len(), 15);
     }
 }
