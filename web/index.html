@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=1">
-  <link rel="modulepreload" href="pkg/tripos.js?v=1">
+  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="modulepreload" href="pkg/tripos.js?v=2">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -65,6 +65,9 @@
       </div>
       <p class="status-line" id="status-line">TAP THREE CARDS THAT MAKE A SET</p>
       <button class="btn" id="deal" type="button" data-act="deal">DEAL 3</button>
+      <button class="btn btn-icon" id="shuffle" type="button" data-act="shuffle" aria-label="Shuffle the cards on the table" title="Shuffle">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+      </button>
       <button class="btn btn-primary" id="new-game" type="button" data-act="new">NEW DEAL</button>
     </section>
 
@@ -111,10 +114,10 @@
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=1';
+    import init, * as tripos from './pkg/tripos.js?v=2';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=1' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=2' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>

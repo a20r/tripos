@@ -81,6 +81,11 @@ impl Game {
         }
     }
 
+    /// Rearranges the cards on the table without changing which cards are there.
+    pub fn shuffle_table(&mut self, rng: &mut Rng) {
+        rng.shuffle(&mut self.table);
+    }
+
     /// Deals three more cards on request. Returns false when the deck is short
     /// or the table is full. Callers decide whether the request was justified
     /// (see `has_set`), since the penalty is a scoring matter.
@@ -197,6 +202,20 @@ mod tests {
             };
             assert_eq!(g.table.len(), want);
         }
+    }
+
+    #[test]
+    fn shuffle_keeps_the_same_cards() {
+        let mut g = Game::new(&mut Rng::new(11));
+        let mut before = g.table.clone();
+        let deck = g.deck.clone();
+        g.shuffle_table(&mut Rng::new(5));
+        assert_ne!(g.table, before, "order should change");
+        let mut after = g.table.clone();
+        before.sort();
+        after.sort();
+        assert_eq!(before, after);
+        assert_eq!(g.deck, deck);
     }
 
     #[test]
