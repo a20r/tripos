@@ -44,7 +44,8 @@ clears the selection.
 ## Layout
 
 - `engine/`: the rules (`is_set`, `third`, `find_sets`), the deck and table
-  (`Game`), and daily seeding as a pure Rust crate with no dependencies
+  (`Game`, twelve cards topped up after each set, three more only on request),
+  and daily seeding as a pure Rust crate with no dependencies
   (`cargo test -p tripos-engine`).
 - `src/`: the browser game: state, persistence, SVG card faces, rendering and
   input through `web-sys`, compiled to WebAssembly with `wasm-bindgen`.
