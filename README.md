@@ -11,7 +11,7 @@ three), shape (diamond, pill, squiggle), colour, and shading (solid, striped,
 open). Three cards are a set when each attribute is all the same or all
 different across the three. Tap three cards to claim a set.
 
-Three modes, switched with the control under the table:
+Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it):
 
 - **Solo**: race the clock through the whole deck. A wrong pick adds 10
   seconds, `HINT` reveals one card of a set for 15 seconds (press again for a
@@ -26,8 +26,7 @@ Three modes, switched with the control under the table:
   from the date. Your best time for the day and your streak of finished days
   are kept, and `SHARE` copies a one-line result.
 
-Three themes, switched with the second control under the table (`T` cycles
-them):
+Three themes, also under **OPTIONS** (`T` cycles them):
 
 - **Neon**: the Blade Runner look, pink, cyan and violet on near-black.
 - **Classic**: a clean card-table look, red, green and purple on white.

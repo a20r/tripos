@@ -280,6 +280,10 @@ struct Els {
     table_wrap: HtmlElement,
     stats_panel: HtmlElement,
     stats_body: HtmlElement,
+    options_btn: HtmlButtonElement,
+    options: HtmlElement,
+    options_scrim: HtmlElement,
+    options_summary: HtmlElement,
     new_game: HtmlButtonElement,
     seg_players: HtmlElement,
     mode_btns: [HtmlButtonElement; 3],
@@ -326,6 +330,8 @@ pub struct App {
     stats_open: bool,
     /// Reset asks for a second tap.
     reset_armed: bool,
+    /// The options sheet is up over the footer.
+    options_open: bool,
 }
 
 pub fn boot() {
@@ -347,6 +353,10 @@ pub fn boot() {
         stats_btn: dom::btn("stats-btn"),
         table_wrap: dom::el("table-wrap"),
         stats_panel: dom::el("stats-panel"),
+        options_btn: dom::btn("options-btn"),
+        options: dom::el("options"),
+        options_scrim: dom::el("options-scrim"),
+        options_summary: dom::el("options-summary"),
         stats_body: dom::el("stats-body"),
         new_game: dom::btn("new-game"),
         seg_players: dom::el("seg-players"),
@@ -411,6 +421,7 @@ pub fn boot() {
         stats: Stats::default(),
         stats_open: false,
         reset_armed: false,
+        options_open: false,
     }));
     {
         let mut a = app.borrow_mut();
@@ -592,6 +603,7 @@ impl App {
                 if THEMES[i] == t { "true" } else { "false" },
             );
         }
+        self.options_summary();
         if !boot {
             // Card labels and the profile name colours, so they follow the theme.
             self.render_table();
@@ -614,6 +626,9 @@ impl App {
         self.save();
         self.cancel_pending();
         self.close_stats();
+        // Picking a mode means playing it: the sheet gets out of the way. This runs
+        // before the switch because closing refreshes the display of the current game.
+        self.close_options();
         self.locked = false;
         self.selected.clear();
         self.hinted.clear();
@@ -625,6 +640,7 @@ impl App {
         for (i, b) in self.els.mode_btns.iter().enumerate() {
             let _ = b.set_attribute("aria-checked", if MODES[i] == m { "true" } else { "false" });
         }
+        self.options_summary();
         dom::set_hidden(&self.els.hint, !m.is_timed());
         dom::set_hidden(&self.els.seg_players, m.is_timed());
         self.els.new_game.set_text_content(Some(match m {
@@ -751,6 +767,7 @@ impl App {
         let run = self.mode.is_timed()
             && self.overlay == Overlay::None
             && !self.stats_open
+            && !self.options_open
             && !dom::page_hidden()
             && !self.is_over();
         if let Some(t) = self.timed_mut() {
@@ -992,7 +1009,8 @@ impl App {
             "<li><b>Party</b>: tap your bar to call a set, then pick three within seven seconds. Right +1, wrong or late &minus;1.</li>",
             "<li>The shuffle button rearranges the table to give you a fresh look. It is free.</li>",
             "<li>The profile button flips the table over to show which kinds of set you take and which you pass over, across all your Solo and Daily games.</li>",
-            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>P</b> profile, <b>1</b> to <b>4</b> call.</li>",
+            "<li>Mode and theme are under <b>OPTIONS</b> at the bottom.</li>",
+            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>P</b> profile, <b>O</b> options, <b>1</b> to <b>4</b> call.</li>",
             "</ul>"
         );
         self.show_overlay(
@@ -1116,6 +1134,8 @@ impl App {
             "shuffle" => self.shuffle(),
             "stats" => self.toggle_stats(),
             "stats-reset" => self.reset_stats(),
+            "options" => self.toggle_options(),
+            "options-close" => self.close_options(),
             "new" => self.new_game(),
             "rules" => self.rules(),
             "buzz" => {
@@ -1143,7 +1163,9 @@ impl App {
         let k = key.to_ascii_lowercase();
         match k.as_str() {
             "escape" => {
-                if self.stats_open {
+                if self.options_open {
+                    self.close_options();
+                } else if self.stats_open {
                     self.close_stats();
                 } else if self.overlay != Overlay::None {
                     if self.overlay == Overlay::Rules {
@@ -1162,6 +1184,7 @@ impl App {
             }
             "t" => self.set_theme(self.theme.next(), false),
             "p" => self.toggle_stats(),
+            "o" => self.toggle_options(),
             "n" => self.new_game(),
             "h" => self.hint(),
             "d" => self.deal(),
@@ -1183,7 +1206,12 @@ impl App {
     }
 
     fn on_card(&mut self, i: usize) {
-        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
+        if self.locked
+            || self.overlay != Overlay::None
+            || self.stats_open
+            || self.options_open
+            || self.is_over()
+        {
             return;
         }
         if i >= self.game().table().len() {
@@ -1338,7 +1366,13 @@ impl App {
     }
 
     fn hint(&mut self) {
-        if !self.mode.is_timed() || self.locked || self.overlay != Overlay::None || self.is_over() {
+        if !self.mode.is_timed()
+            || self.locked
+            || self.overlay != Overlay::None
+            || self.stats_open
+            || self.options_open
+            || self.is_over()
+        {
             return;
         }
         let sets = self.game().sets();
@@ -1366,7 +1400,12 @@ impl App {
 
     /// Rearranges the table for a fresh look. Selection and hints follow their cards.
     fn shuffle(&mut self) {
-        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
+        if self.locked
+            || self.overlay != Overlay::None
+            || self.stats_open
+            || self.options_open
+            || self.is_over()
+        {
             return;
         }
         if self.mode == Mode::Party && self.party.holder.is_some() {
@@ -1388,7 +1427,12 @@ impl App {
     }
 
     fn deal(&mut self) {
-        if self.locked || self.overlay != Overlay::None || self.stats_open || self.is_over() {
+        if self.locked
+            || self.overlay != Overlay::None
+            || self.stats_open
+            || self.options_open
+            || self.is_over()
+        {
             return;
         }
         if self.mode == Mode::Party && self.party.holder.is_some() {
@@ -1479,6 +1523,50 @@ impl App {
     }
 
     // ---------- play profile ----------
+
+    fn toggle_options(&mut self) {
+        if self.options_open {
+            self.close_options();
+        } else {
+            self.open_options();
+        }
+    }
+
+    fn open_options(&mut self) {
+        if self.options_open {
+            return;
+        }
+        self.options_open = true;
+        dom::set_class(&self.els.options, "open", true);
+        dom::set_class(&self.els.options_scrim, "open", true);
+        let _ = self.els.options.set_attribute("aria-hidden", "false");
+        let _ = self.els.options_btn.set_attribute("aria-expanded", "true");
+        self.announce("Options shown.");
+        self.sync_clock();
+    }
+
+    fn close_options(&mut self) {
+        if !self.options_open {
+            return;
+        }
+        self.options_open = false;
+        dom::set_class(&self.els.options, "open", false);
+        dom::set_class(&self.els.options_scrim, "open", false);
+        let _ = self.els.options.set_attribute("aria-hidden", "true");
+        let _ = self.els.options_btn.set_attribute("aria-expanded", "false");
+        self.announce("Options hidden.");
+        self.sync_clock();
+    }
+
+    /// The footer button names the current mode and theme.
+    fn options_summary(&self) {
+        let text = format!(
+            "{}{MIDDOT}{}",
+            self.mode.key().to_uppercase(),
+            self.theme.key().to_uppercase()
+        );
+        self.els.options_summary.set_text_content(Some(&text));
+    }
 
     fn toggle_stats(&mut self) {
         if self.stats_open {

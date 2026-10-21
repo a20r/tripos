@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=5">
-  <link rel="modulepreload" href="pkg/tripos.js?v=5">
+  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="modulepreload" href="pkg/tripos.js?v=6">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -105,27 +105,47 @@
 
     <footer class="foot">
       <p class="sr-only" id="status" aria-live="polite"></p>
-      <div class="foot-switches">
+      <button class="btn options-btn" id="options-btn" type="button" data-act="options" aria-expanded="false" aria-controls="options">
+        <span class="opt-sum" id="options-summary">SOLO &middot; NEON</span>
+        <span class="opt-label">OPTIONS</span>
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 7h10"/><path d="M18 7h2"/><circle cx="16" cy="7" r="2"/><path d="M4 17h2"/><path d="M10 17h10"/><circle cx="8" cy="17" r="2"/></svg>
+      </button>
+    </footer>
+
+    <!-- Mode and theme live in a sheet that slides up over the footer. -->
+    <button class="sheet-scrim" id="options-scrim" type="button" data-act="options-close" aria-label="Close options" tabindex="-1"></button>
+    <div class="sheet" id="options" role="dialog" aria-modal="true" aria-label="Options" aria-hidden="true">
+      <div class="sheet-head">
+        <p class="sheet-kicker">OPTIONS</p>
+        <button class="btn btn-icon" type="button" data-act="options-close" aria-label="Close options">&times;</button>
+      </div>
+      <div class="sheet-row">
+        <section class="sheet-sec">
+          <h3>MODE</h3>
         <div class="seg seg-modes" role="radiogroup" aria-label="Game mode">
           <button class="seg-btn" id="mode-solo" type="button" role="radio" data-act="mode" data-mode="solo" aria-checked="true">SOLO</button>
           <button class="seg-btn party" id="mode-party" type="button" role="radio" data-act="mode" data-mode="party" aria-checked="false">PARTY</button>
           <button class="seg-btn daily" id="mode-daily" type="button" role="radio" data-act="mode" data-mode="daily" aria-checked="false">DAILY</button>
         </div>
+        </section>
+        <section class="sheet-sec">
+          <h3>THEME</h3>
         <div class="seg seg-theme" role="radiogroup" aria-label="Theme">
           <button class="seg-btn" id="theme-neon" type="button" role="radio" data-act="theme" data-theme="neon" aria-checked="true">NEON</button>
           <button class="seg-btn" id="theme-classic" type="button" role="radio" data-act="theme" data-theme="classic" aria-checked="false">CLASSIC</button>
           <button class="seg-btn" id="theme-night" type="button" role="radio" data-act="theme" data-theme="night" aria-checked="false">NIGHT</button>
         </div>
+        </section>
       </div>
       <p class="foot-line">WALLACE CORP. &middot; PATTERN RECOGNITION UNIT &middot; LOS ANGELES 2049</p>
-    </footer>
+    </div>
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=5';
+    import init, * as tripos from './pkg/tripos.js?v=6';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=5' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=6' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>
