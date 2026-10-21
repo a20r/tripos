@@ -1,0 +1,53 @@
+[workspace]
+members = ["engine"]
+
+[package]
+name = "tripos"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Tripos: a Blade Runner themed SET card game for phones and tablets, in Rust and WebAssembly"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tripos-engine = { path = "engine" }
+wasm-bindgen = "0.2.129"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+console_error_panic_hook = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "AddEventListenerOptions",
+  "Clipboard",
+  "CssStyleDeclaration",
+  "Document",
+  "DomTokenList",
+  "Element",
+  "Event",
+  "EventTarget",
+  "HtmlElement",
+  "HtmlButtonElement",
+  "HtmlCollection",
+  "KeyboardEvent",
+  "Location",
+  "MouseEvent",
+  "Navigator",
+  "Node",
+  "NodeList",
+  "ShareData",
+  "Storage",
+  "Window",
+  "console",
+]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
