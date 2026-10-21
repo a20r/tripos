@@ -13,7 +13,9 @@ else
   WASM=target/wasm32-unknown-unknown/debug/tripos.wasm
 fi
 
-rm -rf dist
+# Cleared in place rather than removed, so a dev server rooted in dist/ keeps working.
+mkdir -p dist
+find dist -mindepth 1 -delete
 mkdir -p dist/pkg
 cp -r web/. dist/
 wasm-bindgen --target web --no-typescript --out-dir dist/pkg "$WASM"

@@ -331,6 +331,29 @@ body {
   justify-content: center;
   align-content: center;
 }
+/* The table flips over to show the play profile on its back. */
+.table-wrap { perspective: 1800px; }
+.flip {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 650ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.table-wrap.flipped .flip { transform: rotateY(180deg); }
+.flip > .table,
+.flip > .stats-panel {
+  position: absolute;
+  inset: 0;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  /* Each face also hides at the half-turn, for browsers that ignore backface-visibility. */
+  transition: visibility 0s linear 325ms;
+}
+.flip > .stats-panel { transform: rotateY(180deg); visibility: hidden; }
+.table-wrap.flipped .flip > .table { visibility: hidden; pointer-events: none; }
+.table-wrap.flipped .flip > .stats-panel { visibility: visible; }
+
 /* Cells take the card's 8:5 shape, as large as the width or height allows, and the
    block sits centred so the cards stay tight however much room is left over. */
 @supports (width: 1cqw) {
@@ -433,6 +456,133 @@ body {
   to { transform: scale(1) rotate(0); opacity: 1; }
 }
 .table.armed .card:not(.sel):not(.good):not(.bad) .frame { stroke: var(--sel); stroke-opacity: 0.45; }
+
+/* ---------- play profile ---------- */
+
+.stats-panel {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: 0 0 18px rgba(0, 240, 255, 0.12), inset 0 0 24px rgba(155, 77, 255, 0.14);
+}
+.stats-body { padding: 14px 16px 18px; }
+.st-kicker {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  color: var(--cyan);
+}
+.st-title {
+  margin: 4px 0 8px;
+  font-size: clamp(18px, 3.2vw, 26px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  color: var(--white);
+  text-shadow: 0 0 10px var(--pink), 0 0 24px rgba(255, 43, 214, 0.5);
+}
+.st-sum {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--text);
+}
+.st-dim { color: var(--muted); }
+.st-warn { color: var(--amber); }
+.st-verdicts {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.25);
+}
+.st-v {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  color: var(--text);
+}
+.st-v + .st-v { margin-top: 6px; }
+.st-v b { font-weight: 400; color: var(--white); }
+.st-vl {
+  display: inline-block;
+  min-width: 15ch;
+  margin-right: 8px;
+  color: var(--cyan);
+  letter-spacing: 0.16em;
+  font-size: 11px;
+}
+.st-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 6px 22px;
+}
+.st-sec h3 {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+}
+.st-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 2fr) 5.5ch;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+.st-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.st-bar {
+  position: relative;
+  height: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+.st-bar i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--w, 0%);
+  background: var(--cyan);
+  box-shadow: 0 0 8px var(--cyan);
+  transition: width 500ms ease;
+}
+.st-bar b {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--m, 0%);
+  width: 2px;
+  margin-left: -1px;
+  background: var(--white);
+  opacity: 0.8;
+}
+.st-row.lean .st-label { color: var(--good); }
+.st-row.lean .st-bar i { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.st-row.miss .st-label { color: var(--pink-2); }
+.st-row.miss .st-bar i { background: var(--pink); box-shadow: 0 0 8px var(--pink); }
+.st-note {
+  margin: 12px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.st-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 
 /* ---------- overlay ---------- */
 
@@ -570,10 +720,13 @@ body {
 /* Phones: the status line takes its own row and the buttons share the width. */
 @media (max-width: 640px) {
   .controls { flex-wrap: wrap; }
-  .controls .btn { flex: 1; padding-left: 6px; padding-right: 6px; }
-  .controls .btn-icon { flex: 0 0 44px; }
-  .seg-players { flex: 1; min-width: 0; }
-  .status-line { flex-basis: 100%; order: 10; }
+  /* First row: the three text controls share the width, which leaves no room for an icon. */
+  .controls .btn { flex: 1 1 30%; padding-left: 6px; padding-right: 6px; }
+  .seg-players { flex: 1 1 30%; min-width: 0; }
+  /* Second row: the two icon buttons flank the status line. */
+  .controls .btn-icon { flex: 0 0 44px; order: 11; }
+  .status-line { flex: 1 1 0; min-width: 0; order: 12; }
+  .controls #stats-btn { order: 13; }
 }
 @media (max-width: 480px) {
   .tagline { display: none; }
@@ -603,6 +756,7 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .rain::before, .title, .title::before, .title::after, .card.in, .card.bad, .card.hint .frame { animation: none !important; }
   .card { transition: none; }
+  .flip, .flip > .table, .flip > .stats-panel, .st-bar i { transition: none; }
 }
 
 /* ---------- Classic theme: the clean card-table look ---------- */
@@ -672,6 +826,17 @@ body {
 [data-theme="classic"] .card.good .frame { fill: #e8f6ec; }
 [data-theme="classic"] .card.bad .frame { stroke: #d62828; }
 [data-theme="classic"] .card.hint .frame { stroke: #2b4fd6; }
+[data-theme="classic"] .stats-panel { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+[data-theme="classic"] .st-title { text-shadow: none; font-weight: 800; }
+[data-theme="classic"] .st-kicker { font-weight: 600; }
+[data-theme="classic"] .st-verdicts { background: #f6f4ee; }
+[data-theme="classic"] .st-bar { background: #ece9e1; }
+[data-theme="classic"] .st-bar i { box-shadow: none; }
+[data-theme="classic"] .st-bar b { background: #1f1d1a; }
+[data-theme="classic"] .st-row.lean .st-bar i,
+[data-theme="classic"] .st-row.miss .st-bar i { box-shadow: none; }
+[data-theme="classic"] .st-row.miss .st-label { color: #d62828; }
+[data-theme="classic"] .st-row.miss .st-bar i { background: #d62828; }
 [data-theme="classic"] .overlay { background: rgba(251, 250, 246, 0.94); border-color: var(--line); }
 [data-theme="classic"] .overlay-kicker { color: #2b4fd6; font-weight: 600; }
 [data-theme="classic"] .overlay-title { color: var(--text); text-shadow: none; font-weight: 800; }
@@ -734,6 +899,14 @@ body {
 [data-theme="night"] .card.hint .frame { animation: none; stroke-width: 3; }
 [data-theme="night"] .card.good .frame { fill: rgba(127, 160, 112, 0.1); }
 [data-theme="night"] .card.bad .frame { stroke: #a0586c; }
+[data-theme="night"] .stats-panel { box-shadow: none; }
+[data-theme="night"] .st-title { text-shadow: none; }
+[data-theme="night"] .st-verdicts { background: #000; }
+[data-theme="night"] .st-bar i,
+[data-theme="night"] .st-row.lean .st-bar i,
+[data-theme="night"] .st-row.miss .st-bar i { box-shadow: none; }
+[data-theme="night"] .st-row.miss .st-label { color: #a0586c; }
+[data-theme="night"] .st-row.miss .st-bar i { background: #a0586c; }
 [data-theme="night"] .overlay { background: rgba(0, 0, 0, 0.92); backdrop-filter: none; -webkit-backdrop-filter: none; }
 [data-theme="night"] .overlay-kicker { color: var(--cyan-2); }
 [data-theme="night"] .overlay-title { color: var(--white); text-shadow: none; }
