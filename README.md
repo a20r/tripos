@@ -26,6 +26,21 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
   from the date. Your best time for the day and your streak of finished days
   are kept, and `SHARE` copies a one-line result.
 
+- **Online**: two devices, one deck, with live voice. One player hosts a
+  room and shares the five-letter code or the link; the other joins. Moves
+  travel over a WebRTC data channel and each side sends its microphone, so you
+  can talk while you play. First to tap a set takes it (the host settles
+  races), a wrong pick costs a point, and either side can ask for three more
+  cards when no set is out. The two browsers find each other through
+  [ntfy.sh](https://ntfy.sh), a public pub/sub service, using the room code as
+  the topic; no account or server of your own is needed, and `NTFY` in
+  `src/net.rs` points at any other ntfy server. Only STUN is used, so a
+  connection can fail between two strict NATs. Voice needs microphone
+  permission; without it the game still plays and you still hear the other
+  side. `?join=CODE` on the page URL opens the lobby with the code filled in,
+  and `?signal=local` swaps the signalling for a same-browser channel, which
+  the tests use.
+
 Three themes, also under **OPTIONS** (`T` cycles them):
 
 - **Neon**: the Blade Runner look, pink, cyan and violet on near-black.

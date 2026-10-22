@@ -17,6 +17,7 @@ use web_sys::{Element, HtmlButtonElement, HtmlElement, KeyboardEvent, MouseEvent
 
 use crate::cards;
 use crate::dom;
+use crate::net::{self, Net, NetEvent, Role};
 use crate::storage::*;
 
 const SAVE_V: u32 = 1;
@@ -51,6 +52,7 @@ pub enum Mode {
     Solo,
     Party,
     Daily,
+    Online,
 }
 
 impl Mode {
@@ -59,22 +61,69 @@ impl Mode {
             Mode::Solo => "solo",
             Mode::Party => "party",
             Mode::Daily => "daily",
+            Mode::Online => "online",
         }
     }
     fn from_key(s: &str) -> Mode {
         match s {
             "party" => Mode::Party,
             "daily" => Mode::Daily,
+            "online" => Mode::Online,
             _ => Mode::Solo,
         }
     }
-    /// Solo and Daily race a clock; Party keeps score.
+    /// Solo and Daily race a clock; Party and Online keep score.
     fn is_timed(self) -> bool {
-        !matches!(self, Mode::Party)
+        !matches!(self, Mode::Party | Mode::Online)
     }
 }
 
-const MODES: [Mode; 3] = [Mode::Solo, Mode::Party, Mode::Daily];
+const MODES: [Mode; 4] = [Mode::Solo, Mode::Party, Mode::Daily, Mode::Online];
+
+/// What travels over the data channel. The host owns the game: guests ask,
+/// the host applies and broadcasts, and both sides replay the same moves on
+/// the same seeded deck. Claims name cards, not positions, so each side may
+/// shuffle its own table.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "t")]
+enum Wire {
+    Start { seed: u64 },
+    Claim { cards: [u8; 3] },
+    Claimed { by: u8, cards: [u8; 3] },
+    Lost,
+    Wrong { by: u8 },
+    Deal,
+    Dealt,
+    NoDeal,
+}
+
+struct Online {
+    game: Game,
+    scores: [i32; 2],
+    /// 0 for the host, 1 for the guest.
+    me: usize,
+    started: bool,
+    over: bool,
+    /// A guest claim awaiting the host's verdict.
+    pending: Option<[Card; 3]>,
+    net: Option<Rc<Net>>,
+    mic: Option<bool>,
+}
+
+impl Online {
+    fn idle() -> Online {
+        Online {
+            game: Game::from_deck(Vec::new()),
+            scores: [0; 2],
+            me: 0,
+            started: false,
+            over: false,
+            pending: None,
+            net: None,
+            mic: None,
+        }
+    }
+}
 
 /// Visual theme: the Blade Runner neon look, a clean take on the original
 /// card game, or an ultra-dark night mode for playing with the lights off.
@@ -286,7 +335,17 @@ struct Els {
     options_summary: HtmlElement,
     new_game: HtmlButtonElement,
     seg_players: HtmlElement,
-    mode_btns: [HtmlButtonElement; 3],
+    mode_btns: [HtmlButtonElement; 4],
+    mic: HtmlButtonElement,
+    lobby: HtmlElement,
+    lobby_title: HtmlElement,
+    lobby_room: HtmlElement,
+    lobby_status: HtmlElement,
+    lobby_start: HtmlElement,
+    lobby_live: HtmlElement,
+    lobby_share: HtmlButtonElement,
+    lobby_code: web_sys::HtmlInputElement,
+    remote_audio: web_sys::HtmlAudioElement,
     theme_btns: [HtmlButtonElement; 3],
     party_top: HtmlElement,
     party_bottom: HtmlElement,
@@ -332,6 +391,9 @@ pub struct App {
     reset_armed: bool,
     /// The options sheet is up over the footer.
     options_open: bool,
+    online: Online,
+    /// Transports closed from inside their own event handler; freed on the next tick.
+    dead_nets: Vec<Rc<Net>>,
 }
 
 pub fn boot() {
@@ -364,7 +426,22 @@ pub fn boot() {
             dom::btn("mode-solo"),
             dom::btn("mode-party"),
             dom::btn("mode-daily"),
+            dom::btn("mode-online"),
         ],
+        mic: dom::btn("mic"),
+        lobby: dom::el("lobby"),
+        lobby_title: dom::el("lobby-title"),
+        lobby_room: dom::el("lobby-room"),
+        lobby_status: dom::el("lobby-status"),
+        lobby_start: dom::el("lobby-start"),
+        lobby_live: dom::el("lobby-live"),
+        lobby_share: dom::btn("lobby-share"),
+        lobby_code: dom::el("lobby-code")
+            .dyn_into::<web_sys::HtmlInputElement>()
+            .expect("#lobby-code is an input"),
+        remote_audio: dom::el("remote-audio")
+            .dyn_into::<web_sys::HtmlAudioElement>()
+            .expect("#remote-audio is an audio element"),
         theme_btns: [
             dom::btn("theme-neon"),
             dom::btn("theme-classic"),
@@ -422,6 +499,8 @@ pub fn boot() {
         stats_open: false,
         reset_armed: false,
         options_open: false,
+        online: Online::idle(),
+        dead_nets: Vec::new(),
     }));
     {
         let mut a = app.borrow_mut();
@@ -453,6 +532,12 @@ pub fn boot() {
     a.arrange_bars();
     let saved = dom::local_get(MODE_KEY).unwrap_or_default();
     a.set_mode(Mode::from_key(&saved), true);
+    // A shared room link lands straight in the lobby with the code filled in.
+    if let Some(code) = net::code_from_url() {
+        a.set_mode(Mode::Online, false);
+        a.els.lobby_code.set_value(&code);
+        a.lobby_status(&format!("TAP JOIN TO ENTER ROOM {code}"));
+    }
     let cb = a.tick_cb.as_ref().expect("tick closure");
     a.tick_timer = Some(dom::set_interval(cb, TICK_MS));
     // The app lives for the page: keep the Rc alive.
@@ -544,7 +629,7 @@ impl App {
         match self.mode {
             Mode::Solo => self.solo.as_ref(),
             Mode::Daily => self.daily.as_ref(),
-            Mode::Party => None,
+            Mode::Party | Mode::Online => None,
         }
     }
 
@@ -552,13 +637,14 @@ impl App {
         match self.mode {
             Mode::Solo => self.solo.as_mut(),
             Mode::Daily => self.daily.as_mut(),
-            Mode::Party => None,
+            Mode::Party | Mode::Online => None,
         }
     }
 
     fn game(&self) -> &Game {
         match self.mode {
             Mode::Party => &self.party.game,
+            Mode::Online => &self.online.game,
             _ => &self.timed().expect("timed game").game,
         }
     }
@@ -566,6 +652,7 @@ impl App {
     fn game_mut(&mut self) -> &mut Game {
         match self.mode {
             Mode::Party => &mut self.party.game,
+            Mode::Online => &mut self.online.game,
             _ => &mut self.timed_mut().expect("timed game").game,
         }
     }
@@ -573,6 +660,7 @@ impl App {
     fn is_over(&self) -> bool {
         match self.mode {
             Mode::Party => self.party.over,
+            Mode::Online => self.online.over || !self.online.started,
             _ => self.timed().map(|t| t.over).unwrap_or(false),
         }
     }
@@ -634,6 +722,9 @@ impl App {
         self.hinted.clear();
         self.fresh.clear();
         self.party.holder = None;
+        if self.mode == Mode::Online && m != Mode::Online {
+            self.online_leave();
+        }
         self.mode = m;
         dom::local_set(MODE_KEY, m.key());
         let _ = self.els.app.set_attribute("data-mode", m.key());
@@ -642,10 +733,11 @@ impl App {
         }
         self.options_summary();
         dom::set_hidden(&self.els.hint, !m.is_timed());
-        dom::set_hidden(&self.els.seg_players, m.is_timed());
+        dom::set_hidden(&self.els.seg_players, m != Mode::Party);
+        dom::set_hidden(&self.els.mic, m != Mode::Online);
         self.els.new_game.set_text_content(Some(match m {
             Mode::Daily => "RESTART",
-            Mode::Party => "NEW GAME",
+            Mode::Party | Mode::Online => "NEW GAME",
             Mode::Solo => "NEW DEAL",
         }));
         self.ensure_game();
@@ -653,7 +745,14 @@ impl App {
         self.tagline();
         self.render_all();
         self.fresh.clear();
-        if self.is_over() {
+        if m == Mode::Online {
+            self.render_mic();
+            dom::set_hidden(&self.els.lobby, self.online.started);
+            if !self.online.started {
+                self.lobby_reset();
+            }
+            self.say(&self.idle_line());
+        } else if self.is_over() {
             self.show_done();
         } else {
             self.say(&self.idle_line());
@@ -692,7 +791,7 @@ impl App {
                     self.daily = Some(Timed::new(daily::daily(&today), Some(today)));
                 }
             }
-            Mode::Party => {}
+            Mode::Party | Mode::Online => {}
         }
     }
 
@@ -701,6 +800,7 @@ impl App {
             Mode::Solo => "ALL THE SAME OR ALL DIFFERENT",
             Mode::Party => "CALL IT. PICK THREE. SEVEN SECONDS.",
             Mode::Daily => "ONE DECK A DAY, THE SAME FOR EVERYONE",
+            Mode::Online => "TWO DEVICES, ONE DECK, LIVE VOICE",
         };
         self.els.tagline.set_text_content(Some(line));
     }
@@ -708,6 +808,8 @@ impl App {
     fn idle_line(&self) -> String {
         match self.mode {
             Mode::Party => "TAP YOUR BAR TO CALL A SET".to_string(),
+            Mode::Online if !self.online.started => "HOST A ROOM OR JOIN ONE".to_string(),
+            Mode::Online => "FIRST TO TAP A SET TAKES IT".to_string(),
             _ => "TAP THREE CARDS THAT MAKE A SET".to_string(),
         }
     }
@@ -735,6 +837,18 @@ impl App {
                 self.party.scores = [0; 4];
                 self.party.holder = None;
                 self.party.over = false;
+            }
+            Mode::Online => {
+                // Only the host deals; a guest just clears the end card.
+                if self.online.me == 0 && self.online.net.is_some() {
+                    let seed = dom::random_seed();
+                    self.online_start(seed);
+                    self.net_send(&Wire::Start { seed });
+                } else {
+                    self.close_overlay();
+                    self.say("ONLY THE HOST DEALS A NEW GAME");
+                }
+                return;
             }
         }
         self.close_overlay();
@@ -781,6 +895,7 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.dead_nets.clear();
         if self.mode.is_timed() {
             let total = self.timed().map(|t| t.total()).unwrap_or(0);
             if total / 1000 != self.shown_time / 1000 {
@@ -875,6 +990,18 @@ impl App {
     fn render_stats(&mut self) {
         let e = &self.els;
         match self.mode {
+            Mode::Online => {
+                e.stat_a_label.set_text_content(Some("YOU"));
+                e.stat_b_label.set_text_content(Some("THEM"));
+                e.stat_c_label.set_text_content(Some("DECK"));
+                let me = self.online.me;
+                e.stat_a
+                    .set_text_content(Some(&self.online.scores[me].to_string()));
+                e.stat_b
+                    .set_text_content(Some(&self.online.scores[1 - me].to_string()));
+                e.stat_c
+                    .set_text_content(Some(&self.online.game.remaining().to_string()));
+            }
             Mode::Party => {
                 e.stat_a_label.set_text_content(Some("SETS"));
                 e.stat_b_label.set_text_content(Some("DECK"));
@@ -1025,6 +1152,18 @@ impl App {
 
     fn show_done(&mut self) {
         match self.mode {
+            Mode::Online => {
+                let me = self.online.me;
+                let (mine, theirs) = (self.online.scores[me], self.online.scores[1 - me]);
+                let title = match mine.cmp(&theirs) {
+                    std::cmp::Ordering::Greater => "YOU WIN",
+                    std::cmp::Ordering::Less => "THEY WIN",
+                    std::cmp::Ordering::Equal => "DRAW",
+                };
+                let sub = format!("YOU {mine}{MIDDOT}THEM {theirs}");
+                let primary = if me == 0 { "NEW GAME" } else { "OK" };
+                self.show_overlay(Overlay::Done, "DECK CLEARED", title, &sub, primary, None);
+            }
             Mode::Party => {
                 let n = self.party.players;
                 let top = (0..n).map(|p| self.party.scores[p]).max().unwrap_or(0);
@@ -1122,6 +1261,27 @@ impl App {
                 let t = btn.get_attribute("data-theme").unwrap_or_default();
                 self.set_theme(Theme::from_key(&t), false);
             }
+            "host" => self.online_host(),
+            "join" => self.online_join(),
+            "leave" => {
+                self.online_leave();
+                self.lobby_reset();
+                self.say(&self.idle_line());
+            }
+            "share-room" => {
+                let code = self
+                    .online
+                    .net
+                    .as_ref()
+                    .map(|n| n.code.clone())
+                    .unwrap_or_default();
+                let text = format!(
+                    "JOIN MY TRIPOS GAME{MIDDOT}ROOM {code}\n{}",
+                    net::join_link(&code)
+                );
+                self.share_plain(text, self.els.lobby_share.clone());
+            }
+            "mic" => self.toggle_mic(),
             "players" => {
                 let n = btn
                     .get_attribute("data-n")
@@ -1157,6 +1317,18 @@ impl App {
 
     fn on_key(&mut self, e: &KeyboardEvent) {
         if e.ctrl_key() || e.meta_key() || e.alt_key() {
+            return;
+        }
+        let typing = e
+            .target()
+            .and_then(|t| t.dyn_into::<Element>().ok())
+            .map(|el| el.tag_name() == "INPUT")
+            .unwrap_or(false);
+        if typing {
+            if e.key() == "Enter" {
+                e.prevent_default();
+                self.online_join();
+            }
             return;
         }
         let key = e.key();
@@ -1221,6 +1393,9 @@ impl App {
             self.say("TAP YOUR BAR FIRST");
             return;
         }
+        if self.mode == Mode::Online && self.online.pending.is_some() {
+            return;
+        }
         if let Some(pos) = self.selected.iter().position(|&s| s == i) {
             self.selected.remove(pos);
         } else {
@@ -1236,6 +1411,7 @@ impl App {
         let idx = [self.selected[0], self.selected[1], self.selected[2]];
         let table = self.game().table();
         let good = tripos_engine::is_set(table[idx[0]], table[idx[1]], table[idx[2]]);
+        let picked = [table[idx[0]], table[idx[1]], table[idx[2]]];
         let kids = dom::children(&self.els.table);
         for &i in &idx {
             if let Some(el) = kids.get(i) {
@@ -1244,9 +1420,30 @@ impl App {
         }
         self.locked = true;
         if good {
+            if self.mode == Mode::Online {
+                let cards = picked;
+                if self.online.me == 0 {
+                    self.later(GOOD_MS, Box::new(move |a| a.online_host_claim(cards)));
+                } else {
+                    // The host decides; stay locked until it answers.
+                    self.online.pending = Some(cards);
+                    self.net_send(&Wire::Claim {
+                        cards: cards.map(|c| c.0),
+                    });
+                    self.say("CLAIMING");
+                }
+                return;
+            }
             self.later(GOOD_MS, Box::new(move |a| a.finish_set(idx)));
         } else {
             let line = match self.mode {
+                Mode::Online => {
+                    let me = self.online.me;
+                    self.online.scores[me] -= 1;
+                    self.net_send(&Wire::Wrong { by: me as u8 });
+                    self.render_stats();
+                    format!("NOT A SET{MIDDOT}-1")
+                }
                 Mode::Party => {
                     let p = self.party.holder.unwrap_or(0);
                     self.party.scores[p] -= 1;
@@ -1333,6 +1530,12 @@ impl App {
             return;
         }
         match self.mode {
+            Mode::Online => {
+                if !self.online.started {
+                    return;
+                }
+                self.online.over = true;
+            }
             Mode::Party => {
                 self.party.over = true;
                 self.party.holder = None;
@@ -1438,9 +1641,14 @@ impl App {
         if self.mode == Mode::Party && self.party.holder.is_some() {
             return;
         }
+        if self.mode == Mode::Online && self.online.me == 1 {
+            // Guests ask; the host checks the table and answers.
+            self.net_send(&Wire::Deal);
+            return;
+        }
         if self.game().has_set() {
             let line = match self.mode {
-                Mode::Party => "A SET IS OUT THERE".to_string(),
+                Mode::Party | Mode::Online => "A SET IS OUT THERE".to_string(),
                 _ => {
                     if let Some(t) = self.timed_mut() {
                         t.penalize(BAD_DEAL_MS);
@@ -1462,6 +1670,12 @@ impl App {
             };
             self.say(&line);
             self.save();
+            return;
+        }
+        if self.mode == Mode::Online {
+            if self.online_apply_deal() {
+                self.net_send(&Wire::Dealt);
+            }
             return;
         }
         let before: HashSet<Card> = self.game().table().iter().copied().collect();
@@ -1827,6 +2041,11 @@ impl App {
 
     fn share(&mut self) {
         let text = self.share_text();
+        self.share_plain(text, self.els.secondary.clone());
+    }
+
+    /// Shares text with the system sheet, or copies it, and reports on the button.
+    fn share_plain(&self, text: String, btn: HtmlButtonElement) {
         let nav = dom::window().navigator();
         let weak = self.me.clone();
         // Feature detection through Reflect keeps this independent of web-sys bindings.
@@ -1836,11 +2055,10 @@ impl App {
                 let _ = js_sys::Reflect::set(&data, &"text".into(), &text.clone().into());
                 if let Ok(p) = share.call1(&nav, &data) {
                     if let Ok(p) = p.dyn_into::<js_sys::Promise>() {
+                        let done = btn.clone();
                         wasm_bindgen_futures::spawn_local(async move {
                             if JsFuture::from(p).await.is_ok() {
-                                with_app(&weak, |a| {
-                                    a.els.secondary.set_text_content(Some("SHARED"))
-                                });
+                                with_app(&weak, |_| done.set_text_content(Some("SHARED")));
                             }
                         });
                         return;
@@ -1854,15 +2072,14 @@ impl App {
                     if let Some(write) = write.dyn_ref::<js_sys::Function>() {
                         if let Ok(p) = write.call1(&clip, &text.into()) {
                             if let Ok(p) = p.dyn_into::<js_sys::Promise>() {
+                                let done = btn.clone();
                                 wasm_bindgen_futures::spawn_local(async move {
                                     let label = if JsFuture::from(p).await.is_ok() {
                                         "COPIED"
                                     } else {
                                         "COPY FAILED"
                                     };
-                                    with_app(&weak, |a| {
-                                        a.els.secondary.set_text_content(Some(label))
-                                    });
+                                    with_app(&weak, |_| done.set_text_content(Some(label)));
                                 });
                                 return;
                             }
@@ -1871,6 +2088,317 @@ impl App {
                 }
             }
         }
-        self.els.secondary.set_text_content(Some("COPY FAILED"));
+        btn.set_text_content(Some("COPY FAILED"));
+    }
+
+    // ---------- online ----------
+
+    fn lobby_status(&self, s: &str) {
+        self.els.lobby_status.set_text_content(Some(s));
+    }
+
+    /// The lobby's resting state: host or join, no room yet.
+    fn lobby_reset(&mut self) {
+        dom::set_hidden(&self.els.lobby, false);
+        dom::set_hidden(&self.els.lobby_start, false);
+        dom::set_hidden(&self.els.lobby_live, true);
+        dom::set_hidden(&self.els.lobby_room, true);
+        self.els.lobby_title.set_text_content(Some("LINK UP"));
+        self.els.lobby_share.set_text_content(Some("SHARE LINK"));
+        self.lobby_status("HOST A ROOM, OR JOIN ONE WITH A CODE");
+    }
+
+    fn net_handler(&self) -> net::Handler {
+        let weak = self.me.clone();
+        Rc::new(move |ev: NetEvent| {
+            with_app(&weak, |a| a.net_event(ev));
+        })
+    }
+
+    fn online_connect(&mut self, role: Role, code: String) {
+        self.online_leave();
+        self.online.me = if role == Role::Host { 0 } else { 1 };
+        let handler = self.net_handler();
+        match Net::start(
+            role,
+            code.clone(),
+            net::signal_from_url(),
+            self.els.remote_audio.clone(),
+            handler,
+        ) {
+            Ok(n) => {
+                self.online.net = Some(n);
+                dom::set_hidden(&self.els.lobby_start, true);
+                dom::set_hidden(&self.els.lobby_live, false);
+                dom::set_hidden(&self.els.lobby_room, false);
+                dom::set_hidden(&self.els.lobby_share, role != Role::Host);
+                self.els.lobby_room.set_text_content(Some(&code));
+                self.els
+                    .lobby_title
+                    .set_text_content(Some(if role == Role::Host {
+                        "YOUR ROOM"
+                    } else {
+                        "JOINING"
+                    }));
+                self.lobby_status(if role == Role::Host {
+                    "STARTING THE ROOM"
+                } else {
+                    "LOOKING FOR THE HOST"
+                });
+            }
+            Err(_) => self.lobby_status("THIS BROWSER CANNOT MAKE PEER CALLS"),
+        }
+    }
+
+    fn online_host(&mut self) {
+        if self.mode != Mode::Online {
+            return;
+        }
+        let code = net::random_code();
+        self.online_connect(Role::Host, code);
+    }
+
+    fn online_join(&mut self) {
+        if self.mode != Mode::Online || self.online.net.is_some() {
+            return;
+        }
+        let code = net::clean_code(&self.els.lobby_code.value());
+        if code.len() != net::CODE_LEN {
+            self.lobby_status("ENTER THE 5-CHARACTER ROOM CODE");
+            return;
+        }
+        self.els.lobby_code.set_value(&code);
+        self.online_connect(Role::Guest, code);
+    }
+
+    /// Drops the call and the game; the lobby comes back on the next render.
+    fn online_leave(&mut self) {
+        if let Some(n) = self.online.net.take() {
+            n.close();
+            self.dead_nets.push(n);
+        }
+        let me = self.online.me;
+        self.online = Online::idle();
+        self.online.me = me;
+        self.cancel_pending();
+        self.locked = false;
+        self.selected.clear();
+        self.render_mic();
+    }
+
+    fn net_send(&self, msg: &Wire) {
+        if let (Some(n), Ok(text)) = (self.online.net.as_ref(), serde_json::to_string(msg)) {
+            let _ = n.send(&text);
+        }
+    }
+
+    fn net_event(&mut self, ev: NetEvent) {
+        if self.mode != Mode::Online {
+            return;
+        }
+        match ev {
+            NetEvent::Status(s) => self.lobby_status(&s),
+            NetEvent::Mic(on) => {
+                self.online.mic = Some(on);
+                self.render_mic();
+            }
+            NetEvent::Connected => {
+                if self.online.me == 0 {
+                    let seed = dom::random_seed();
+                    self.online_start(seed);
+                    self.net_send(&Wire::Start { seed });
+                } else {
+                    self.lobby_status("CONNECTED. WAITING FOR THE DEAL");
+                }
+            }
+            NetEvent::Data(text) => {
+                if let Ok(msg) = serde_json::from_str::<Wire>(&text) {
+                    self.on_wire(msg);
+                }
+            }
+            NetEvent::Closed => {
+                let was_playing = self.online.started;
+                self.online_leave();
+                self.lobby_reset();
+                self.lobby_status(if was_playing {
+                    "CONNECTION LOST"
+                } else {
+                    "THE CALL DID NOT CONNECT"
+                });
+                self.close_overlay();
+                self.render_all();
+                self.say(&self.idle_line());
+            }
+        }
+    }
+
+    /// Both sides deal the same deck from the host's seed.
+    fn online_start(&mut self, seed: u64) {
+        self.cancel_pending();
+        self.locked = false;
+        self.selected.clear();
+        self.hinted.clear();
+        self.online.game = Game::new(&mut Rng::new(seed));
+        self.online.scores = [0; 2];
+        self.online.started = true;
+        self.online.over = false;
+        self.online.pending = None;
+        self.fresh = self.online.game.table().iter().copied().collect();
+        dom::set_hidden(&self.els.lobby, true);
+        self.close_overlay();
+        self.render_all();
+        self.say(&self.idle_line());
+    }
+
+    fn on_wire(&mut self, msg: Wire) {
+        let host = self.online.me == 0;
+        match msg {
+            Wire::Start { seed } if !host => self.online_start(seed),
+            Wire::Claim { cards } if host => {
+                let cards = cards.map(Card);
+                if self.indices_of(cards).is_some() {
+                    self.online_apply_claim(1, cards);
+                    self.net_send(&Wire::Claimed {
+                        by: 1,
+                        cards: cards.map(|c| c.0),
+                    });
+                } else {
+                    self.net_send(&Wire::Lost);
+                }
+            }
+            Wire::Claimed { by, cards } if !host => {
+                self.online_apply_claim(by as usize, cards.map(Card));
+            }
+            Wire::Lost if !host => {
+                self.online.pending = None;
+                self.finish_bad();
+                self.say("TOO SLOW: THE HOST TOOK IT");
+            }
+            Wire::Wrong { by } => {
+                let by = (by as usize).min(1);
+                if by != self.online.me {
+                    self.online.scores[by] -= 1;
+                    self.render_stats();
+                    self.say(&format!("THEM{MIDDOT}NOT A SET{MIDDOT}-1"));
+                }
+            }
+            Wire::Deal if host => {
+                if self.online.game.has_set() {
+                    self.net_send(&Wire::NoDeal);
+                } else if self.online_apply_deal() {
+                    self.net_send(&Wire::Dealt);
+                }
+            }
+            Wire::Dealt if !host => {
+                self.online_apply_deal();
+            }
+            Wire::NoDeal if !host => self.say("A SET IS OUT THERE"),
+            _ => {}
+        }
+    }
+
+    /// Where three cards sit on this side's table, if all three are still out.
+    fn indices_of(&self, cards: [Card; 3]) -> Option<[usize; 3]> {
+        let table = self.game().table();
+        let at = |c: Card| table.iter().position(|&t| t == c);
+        Some([at(cards[0])?, at(cards[1])?, at(cards[2])?])
+    }
+
+    fn online_host_claim(&mut self, cards: [Card; 3]) {
+        if self.indices_of(cards).is_some() {
+            self.online_apply_claim(0, cards);
+            self.net_send(&Wire::Claimed {
+                by: 0,
+                cards: cards.map(|c| c.0),
+            });
+        } else {
+            self.finish_bad();
+        }
+    }
+
+    fn online_apply_claim(&mut self, by: usize, cards: [Card; 3]) {
+        let Some(idx) = self.indices_of(cards) else {
+            return;
+        };
+        let before: HashSet<Card> = self.game().table().iter().copied().collect();
+        if self.online.game.claim(idx) != Claim::Set {
+            return;
+        }
+        self.online.scores[by.min(1)] += 1;
+        self.online.pending = None;
+        self.selected.clear();
+        self.locked = false;
+        self.fresh = self
+            .game()
+            .table()
+            .iter()
+            .copied()
+            .filter(|c| !before.contains(c))
+            .collect();
+        self.render_all();
+        let who = if by == self.online.me { "YOU" } else { "THEM" };
+        self.say(&format!("{who}{MIDDOT}SET{MIDDOT}+1"));
+        self.check_over();
+    }
+
+    fn online_apply_deal(&mut self) -> bool {
+        let before: HashSet<Card> = self.game().table().iter().copied().collect();
+        if !self.online.game.deal_three() {
+            self.check_over();
+            return false;
+        }
+        self.fresh = self
+            .game()
+            .table()
+            .iter()
+            .copied()
+            .filter(|c| !before.contains(c))
+            .collect();
+        self.selected.clear();
+        self.render_all();
+        self.say("NO SET: THREE MORE CARDS");
+        true
+    }
+
+    fn toggle_mic(&mut self) {
+        let Some(n) = self.online.net.clone() else {
+            return;
+        };
+        let on = !self.online.mic.unwrap_or(false);
+        if n.has_mic() {
+            n.set_mic(on);
+            self.online.mic = Some(on);
+            self.announce(if on {
+                "Microphone on."
+            } else {
+                "Microphone muted."
+            });
+        }
+        self.render_mic();
+    }
+
+    fn render_mic(&self) {
+        let label = match (self.online.net.as_ref(), self.online.mic) {
+            (None, _) => "MIC",
+            (Some(n), _) if !n.has_mic() => "NO MIC",
+            (Some(_), Some(true)) => "MIC ON",
+            (Some(_), _) => "MUTED",
+        };
+        self.els.mic.set_text_content(Some(label));
+        let _ = self.els.mic.set_attribute(
+            "aria-pressed",
+            if self.online.mic == Some(true) {
+                "true"
+            } else {
+                "false"
+            },
+        );
+        self.els.mic.set_disabled(
+            self.online
+                .net
+                .as_ref()
+                .map(|n| !n.has_mic())
+                .unwrap_or(true),
+        );
     }
 }
