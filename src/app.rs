@@ -745,9 +745,9 @@ impl App {
         self.tagline();
         self.render_all();
         self.fresh.clear();
+        dom::set_hidden(&self.els.lobby, m != Mode::Online || self.online.started);
         if m == Mode::Online {
             self.render_mic();
-            dom::set_hidden(&self.els.lobby, self.online.started);
             if !self.online.started {
                 self.lobby_reset();
             }
