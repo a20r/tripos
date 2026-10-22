@@ -726,7 +726,9 @@ body {
 
 /* ---------- footer ---------- */
 
-.foot { flex: 0 0 auto; }
+.topbar { flex: 0 0 auto; }
+.foot { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+.foot .foot-line { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .options-btn {
   display: flex;
   align-items: center;
@@ -760,19 +762,19 @@ body {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
+  top: 0;
   z-index: 30;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 12px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 16px max(16px, env(safe-area-inset-left));
   border: 1px solid var(--line);
-  border-bottom: 0;
-  border-radius: 16px 16px 0 0;
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
   background: var(--panel);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
-  box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 240, 255, 0.12);
-  transform: translateY(100%);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5), 0 0 24px rgba(0, 240, 255, 0.12);
+  transform: translateY(-100%);
   visibility: hidden;
   transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 280ms;
 }
@@ -825,10 +827,8 @@ body {
   /* First row: the three text controls share the width, which leaves no room for an icon. */
   .controls .btn { flex: 1 1 30%; padding-left: 6px; padding-right: 6px; }
   .seg-players { flex: 1 1 30%; min-width: 0; }
-  /* Second row: the two icon buttons flank the status line. */
-  .controls .btn-icon { flex: 0 0 44px; order: 11; }
-  .status-line { flex: 1 1 0; min-width: 0; order: 12; }
-  .controls #stats-btn { order: 13; }
+  /* Second row: the status line on its own. */
+  .status-line { flex-basis: 100%; order: 10; }
 }
 @media (max-width: 480px) {
   .tagline { display: none; }
@@ -951,7 +951,7 @@ body {
 [data-theme="classic"] .pbar .pname { text-shadow: none; }
 [data-theme="classic"] .pbar.holding { box-shadow: 0 0 0 3px color-mix(in srgb, var(--pc) 35%, transparent); }
 [data-theme="classic"] .foot-line { letter-spacing: 0.1em; }
-[data-theme="classic"] .sheet { box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18); }
+[data-theme="classic"] .sheet { box-shadow: 0 4px 24px rgba(0, 0, 0, 0.18); }
 [data-theme="classic"] .sheet-scrim { background: rgba(40, 36, 30, 0.35); }
 [data-theme="classic"] .sheet-kicker { color: #2b4fd6; font-weight: 600; }
 [data-theme="classic"] .opt-sum { font-weight: 500; }
