@@ -5,6 +5,7 @@
 mod app;
 mod cards;
 mod dom;
+mod net;
 mod storage;
 
 use tripos_engine::Card;
