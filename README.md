@@ -49,7 +49,9 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
   gains a Speed Drill section: accuracy, median and 90th percentile reaction
   time, pace (correct answers per ten seconds), how often you swipe sets
   away, how often near misses fool you, and which kinds of set you spot
-  quickest and slowest.
+  quickest and slowest. A card pile under those verdicts opens a full-screen
+  review of every wrong swipe, newest first and grouped by round, one triple
+  per row with the reason it was or was not a set.
 
 Three themes, also under **OPTIONS** (`T` cycles them):
 

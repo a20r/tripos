@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
 use tripos_engine::speed::{self, SpeedStats, Trial};
-use tripos_engine::{daily, Card, Claim, Game, Rng, Stats};
+use tripos_engine::{daily, Card, Claim, Game, Rng, Signature, Stats};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -388,6 +388,9 @@ struct Els {
     table_wrap: HtmlElement,
     stats_panel: HtmlElement,
     stats_body: HtmlElement,
+    misses: HtmlElement,
+    misses_list: HtmlElement,
+    misses_close: HtmlButtonElement,
     options_btn: HtmlButtonElement,
     options: HtmlElement,
     options_scrim: HtmlElement,
@@ -448,6 +451,8 @@ pub struct App {
     stats: Stats,
     /// The table is flipped over to show the play profile.
     stats_open: bool,
+    /// The full-screen review of wrong speed swipes is showing.
+    misses_open: bool,
     /// Reset asks for a second tap.
     reset_armed: bool,
     /// The options sheet is up over the footer.
@@ -485,6 +490,9 @@ pub fn boot() {
         options_scrim: dom::el("options-scrim"),
         options_summary: dom::el("options-summary"),
         stats_body: dom::el("stats-body"),
+        misses: dom::el("misses"),
+        misses_list: dom::el("misses-list"),
+        misses_close: dom::btn("misses-close"),
         new_game: dom::btn("new-game"),
         seg_players: dom::el("seg-players"),
         mode_btns: [
@@ -567,6 +575,7 @@ pub fn boot() {
         stats_open: false,
         reset_armed: false,
         options_open: false,
+        misses_open: false,
         online: Online::idle(),
         dead_nets: Vec::new(),
         speed: Speed::idle(),
@@ -1478,6 +1487,8 @@ impl App {
             "shuffle" => self.shuffle(),
             "stats" => self.toggle_stats(),
             "stats-reset" => self.reset_stats(),
+            "misses" => self.open_misses(btn),
+            "misses-close" => self.close_misses(),
             "options" => self.toggle_options(),
             "options-close" => self.close_options(),
             "new" => self.new_game(),
@@ -1521,7 +1532,9 @@ impl App {
         let k = key.to_ascii_lowercase();
         match k.as_str() {
             "escape" => {
-                if self.options_open {
+                if self.misses_open {
+                    self.close_misses();
+                } else if self.options_open {
                     self.close_options();
                 } else if self.stats_open {
                     self.close_stats();
@@ -2001,6 +2014,7 @@ impl App {
         if !self.stats_open {
             return;
         }
+        self.close_misses();
         self.stats_open = false;
         self.reset_armed = false;
         dom::set_class(&self.els.table_wrap, "flipped", false);
@@ -2452,6 +2466,14 @@ impl App {
             }
         ));
         h.push_str("</div>");
+        let wrong = st.misses().count();
+        if wrong > 0 {
+            h.push_str(&format!(
+                r#"<button class="pile" type="button" data-act="misses" aria-label="Review the {wrong} triples you swiped wrong"><span class="pile-icon" aria-hidden="true"><i></i><i></i><i></i></span><span class="pile-text"><b>{wrong} WRONG {}</b><small>TAP TO FLIP THROUGH {}</small></span></button>"#,
+                if wrong == 1 { "SWIPE" } else { "SWIPES" },
+                if wrong == 1 { "IT" } else { "THEM" }
+            ));
+        }
         let max_p50 = readings
             .iter()
             .filter_map(|(_, r)| r.p50)
@@ -2489,6 +2511,108 @@ impl App {
         h.push_str(r#"<p class="st-note">BAR: MEDIAN TIME TO SPOT THAT KIND OF SET IN THE DRILL, LONGER IS SLOWER. PERCENT: HOW OFTEN YOU SWIPED RIGHT ON IT.</p>"#);
         h.push_str("</section>");
         h
+    }
+
+    // ---------- wrong swipe review ----------
+
+    /// Grows the review out of the pile button to fill the screen.
+    fn open_misses(&mut self, from: &Element) {
+        if self.misses_open {
+            return;
+        }
+        self.render_misses();
+        let r = from.get_bounding_client_rect();
+        let vw = dom::window()
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .max(1.0);
+        let scale = (r.width() / vw).clamp(0.12, 0.6);
+        let m = &self.els.misses;
+        dom::set_var(m, "--ox", &format!("{:.0}px", r.x() + r.width() / 2.0));
+        dom::set_var(m, "--oy", &format!("{:.0}px", r.y() + r.height() / 2.0));
+        dom::set_var(m, "--os", &format!("{scale:.3}"));
+        // Let the new origin land before the transition starts.
+        let _ = m.offset_width();
+        dom::set_class(m, "open", true);
+        let _ = m.set_attribute("aria-hidden", "false");
+        self.els.misses_list.set_scroll_top(0);
+        self.misses_open = true;
+        let _ = self.els.misses_close.focus();
+        self.announce("Wrong swipes shown.");
+    }
+
+    fn close_misses(&mut self) {
+        if !self.misses_open {
+            return;
+        }
+        self.misses_open = false;
+        dom::set_class(&self.els.misses, "open", false);
+        let _ = self.els.misses.set_attribute("aria-hidden", "true");
+        if let Ok(Some(pile)) = self.els.stats_body.query_selector(".pile") {
+            if let Ok(pile) = pile.dyn_into::<HtmlElement>() {
+                let _ = pile.focus();
+            }
+        }
+    }
+
+    /// One row per wrong swipe, newest first, grouped by round.
+    fn render_misses(&self) {
+        const ATTRS: [&str; 4] = ["NUMBER", "SHAPE", "COLOUR", "SHADING"];
+        let mut h = String::with_capacity(20_000);
+        let mut round = u32::MAX;
+        for a in self.speed_stats.misses() {
+            let Some(cards) = a.cards else { continue };
+            if a.round != round {
+                round = a.round;
+                h.push_str(&format!(
+                    r#"<h3 class="miss-round">{}</h3>"#,
+                    if round == 0 {
+                        "EARLIER".to_string()
+                    } else {
+                        format!("ROUND {round}")
+                    }
+                ));
+            }
+            let why = if a.is_set {
+                Signature::of(cards[0], cards[1], cards[2])
+                    .categories()
+                    .iter()
+                    .map(|k| self.cat_label(k))
+                    .collect::<Vec<_>>()
+                    .join(MIDDOT)
+            } else {
+                let broken: Vec<&str> = speed::broken_attrs(cards[0], cards[1], cards[2])
+                    .iter()
+                    .zip(ATTRS)
+                    .filter(|(b, _)| **b)
+                    .map(|(_, n)| n)
+                    .collect();
+                let verb = if broken.len() == 1 { "BREAKS" } else { "BREAK" };
+                let tag = if a.near {
+                    format!("NEAR MISS{MIDDOT}")
+                } else {
+                    String::new()
+                };
+                format!("{tag}{} {verb} IT", broken.join(" AND "))
+            };
+            h.push_str(&format!(
+                r#"<article class="miss-row {}"><div class="miss-trio">{}</div><p class="miss-meta"><b>{}</b>{MIDDOT}YOU SWIPED {}{MIDDOT}{}<br><span class="miss-why">{why}</span></p></article>"#,
+                if a.is_set { "was-set" } else { "not-set" },
+                cards
+                    .iter()
+                    .map(|c| format!(r#"<div class="miss-face" data-card="{}">{}</div>"#, c.0, cards::face(*c)))
+                    .collect::<String>(),
+                if a.is_set { "A SET" } else { "NOT A SET" },
+                if a.is_set { "LEFT" } else { "RIGHT" },
+                fmt_tenths(a.ms)
+            ));
+        }
+        if h.is_empty() {
+            h.push_str(r#"<p class="st-note">NO WRONG SWIPES ON RECORD.</p>"#);
+        }
+        self.els.misses_list.set_inner_html(&h);
     }
 
     // ---------- deferred work ----------

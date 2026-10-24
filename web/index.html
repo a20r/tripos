@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=9">
-  <link rel="modulepreload" href="pkg/tripos.js?v=9">
+  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="modulepreload" href="pkg/tripos.js?v=10">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -180,13 +180,25 @@
         </section>
       </div>
     </div>
+
+    <!-- Wrong-swipe review: grows out of the profile's card pile to fill the screen. -->
+    <div class="misses" id="misses" role="dialog" aria-modal="true" aria-label="Wrong swipes" aria-hidden="true">
+      <header class="misses-head">
+        <div>
+          <p class="sheet-kicker">SPEED DRILL&nbsp;&middot;&nbsp;REVIEW</p>
+          <h2 class="misses-title">WRONG SWIPES</h2>
+        </div>
+        <button class="btn" id="misses-close" type="button" data-act="misses-close">CLOSE</button>
+      </header>
+      <div class="misses-list" id="misses-list"></div>
+    </div>
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=9';
+    import init, * as tripos from './pkg/tripos.js?v=10';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=9' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=10' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>
