@@ -15,8 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=8">
-  <link rel="modulepreload" href="pkg/tripos.js?v=8">
+  <link rel="stylesheet" href="style.css?v=9">
+  <link rel="modulepreload" href="pkg/tripos.js?v=9">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -84,6 +84,18 @@
     <section class="table-wrap" id="table-wrap">
       <div class="flip">
         <div class="table" id="table" role="grid" aria-label="Cards on the table"></div>
+        <!-- Speed drill: one triple at a time, swiped right for a set and left for not. -->
+        <div class="speed-stage" id="speed" aria-label="Speed drill">
+          <div class="speed-stack" id="speed-stack">
+            <div class="speed-card under under2" aria-hidden="true"></div>
+            <div class="speed-card under under1" aria-hidden="true"></div>
+            <div class="speed-card current" id="speed-card" role="group" aria-label="Three cards: swipe right if they are a set, left if not"></div>
+          </div>
+          <div class="speed-actions">
+            <button class="btn" type="button" data-act="speed-no">&larr; NOT A SET</button>
+            <button class="btn btn-primary" type="button" data-act="speed-yes">SET &rarr;</button>
+          </div>
+        </div>
         <div class="stats-panel" id="stats-panel" aria-hidden="true" aria-label="Your play profile">
           <div class="stats-body" id="stats-body"></div>
         </div>
@@ -155,6 +167,7 @@
           <button class="seg-btn party" id="mode-party" type="button" role="radio" data-act="mode" data-mode="party" aria-checked="false">PARTY</button>
           <button class="seg-btn daily" id="mode-daily" type="button" role="radio" data-act="mode" data-mode="daily" aria-checked="false">DAILY</button>
           <button class="seg-btn online" id="mode-online" type="button" role="radio" data-act="mode" data-mode="online" aria-checked="false">ONLINE</button>
+          <button class="seg-btn speed" id="mode-speed" type="button" role="radio" data-act="mode" data-mode="speed" aria-checked="false">SPEED</button>
         </div>
         </section>
         <section class="sheet-sec">
@@ -170,10 +183,10 @@
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=8';
+    import init, * as tripos from './pkg/tripos.js?v=9';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=8' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=9' }).catch(function (e) { console.error('Tripos failed to start', e); });
   </script>
 </body>
 </html>

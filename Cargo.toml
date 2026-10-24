@@ -48,6 +48,7 @@ features = [
   "MouseEvent",
   "Navigator",
   "Node",
+  "PointerEvent",
   "NodeList",
   "Request",
   "RequestInit",
