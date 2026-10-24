@@ -2108,6 +2108,7 @@ impl App {
         let mut h = String::with_capacity(6000);
         h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE</p>"#);
         h.push_str(r#"<h2 class="st-title">BASELINE REPORT</h2>"#);
+        h.push_str(&self.radar_html());
         h.push_str(r#"<h3 class="st-h">TABLE PLAY&nbsp;&middot;&nbsp;SOLO AND DAILY</h3>"#);
         if st.found == 0 {
             h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
@@ -2510,6 +2511,162 @@ impl App {
         h.push_str("</div>");
         h.push_str(r#"<p class="st-note">BAR: MEDIAN TIME TO SPOT THAT KIND OF SET IN THE DRILL, LONGER IS SLOWER. PERCENT: HOW OFTEN YOU SWIPED RIGHT ON IT.</p>"#);
         h.push_str("</section>");
+        h
+    }
+
+    // ---------- skill radar ----------
+
+    /// A FIFA-style radar: one axis per kind of set, table take rate and
+    /// drill accuracy drawn as two polygons over it. Empty until either has
+    /// seen a set.
+    fn radar_html(&self) -> String {
+        // Opposite axes (i and i + 4) are an attribute's same and mixed sides.
+        const AXES: [(&str, &str, &[&str]); 8] = [
+            ("SAME", "COUNT", &["n0", "n1", "n2"]),
+            ("SAME", "SHAPE", &["s0", "s1", "s2"]),
+            ("SAME", "COLOUR", &["c0", "c1", "c2"]),
+            ("SAME", "SHADING", &["h0", "h1", "h2"]),
+            ("MIXED", "COUNT", &["nx"]),
+            ("MIXED", "SHAPE", &["sx"]),
+            ("MIXED", "COLOUR", &["cx"]),
+            ("MIXED", "SHADING", &["hx"]),
+        ];
+        const CX: f64 = 170.0;
+        const CY: f64 = 165.0;
+        const R: f64 = 108.0;
+
+        let table: Vec<Option<f64>> = AXES
+            .iter()
+            .map(|(_, _, keys)| {
+                let (found, seen) = keys
+                    .iter()
+                    .filter_map(|k| self.stats.cats.get(*k))
+                    .fold((0u32, 0u32), |(f, s), t| (f + t.found, s + t.seen));
+                (seen > 0).then(|| found as f64 / seen as f64)
+            })
+            .collect();
+        let drill: Vec<Option<f64>> = AXES
+            .iter()
+            .map(|(_, _, keys)| {
+                let (ok, n) = keys
+                    .iter()
+                    .map(|k| self.speed_stats.for_key(k))
+                    .fold((0u32, 0u32), |(c, n), r| (c + r.correct, n + r.n));
+                (n > 0).then(|| ok as f64 / n as f64)
+            })
+            .collect();
+        let has_table = table.iter().any(Option::is_some);
+        let has_drill = drill.iter().any(Option::is_some);
+        if !has_table && !has_drill {
+            return String::new();
+        }
+
+        let angle = |i: usize| (-90.0 + 45.0 * i as f64).to_radians();
+        let point = |i: usize, v: f64| {
+            let a = angle(i);
+            format!("{:.1},{:.1}", CX + R * v * a.cos(), CY + R * v * a.sin())
+        };
+        let ring = |v: f64| (0..8).map(|i| point(i, v)).collect::<Vec<_>>().join(" ");
+        let avg = |vals: &[Option<f64>]| {
+            let have: Vec<f64> = vals.iter().flatten().copied().collect();
+            (have.iter().sum::<f64>() / have.len().max(1) as f64 * 100.0).round() as u32
+        };
+
+        let mut h = String::with_capacity(4000);
+        h.push_str(r#"<figure class="radar-wrap">"#);
+        h.push_str(&format!(
+            r#"<svg class="radar" viewBox="0 0 340 330" role="img" aria-label="Skill radar: {}">"#,
+            AXES.iter()
+                .zip(table.iter().zip(drill.iter()))
+                .map(|((a, b, _), (t, d))| {
+                    let pct = |v: &Option<f64>| {
+                        v.map(|x| format!("{}%", (x * 100.0).round() as u32))
+                            .unwrap_or_else(|| "no data".into())
+                    };
+                    format!("{a} {b}: table {}, drill {}", pct(t), pct(d))
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+        for v in [0.25, 0.5, 0.75, 1.0] {
+            h.push_str(&format!(
+                r#"<polygon class="radar-grid" points="{}"/>"#,
+                ring(v)
+            ));
+        }
+        for i in 0..8 {
+            let a = angle(i);
+            h.push_str(&format!(
+                r#"<line class="radar-spoke" x1="{CX}" y1="{CY}" x2="{:.1}" y2="{:.1}"/>"#,
+                CX + R * a.cos(),
+                CY + R * a.sin()
+            ));
+        }
+        for (cls, vals, on) in [
+            ("radar-table", &table, has_table),
+            ("radar-drill", &drill, has_drill),
+        ] {
+            if !on {
+                continue;
+            }
+            let pts = (0..8)
+                .map(|i| point(i, vals[i].unwrap_or(0.0)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            h.push_str(&format!(
+                r#"<polygon class="radar-shape {cls}" points="{pts}"/>"#
+            ));
+            for (i, v) in vals.iter().enumerate() {
+                if let Some(v) = v {
+                    let (x, y) = {
+                        let a = angle(i);
+                        (CX + R * v * a.cos(), CY + R * v * a.sin())
+                    };
+                    h.push_str(&format!(
+                        r#"<circle class="radar-dot {cls}" cx="{x:.1}" cy="{y:.1}" r="3.5"/>"#
+                    ));
+                }
+            }
+        }
+        for (i, (a, b, _)) in AXES.iter().enumerate() {
+            let ang = angle(i);
+            let (lx, ly) = (CX + (R + 22.0) * ang.cos(), CY + (R + 22.0) * ang.sin());
+            let anchor = if ang.cos().abs() < 0.01 {
+                "middle"
+            } else if ang.cos() > 0.0 {
+                "start"
+            } else {
+                "end"
+            };
+            let dy = if ang.sin() < -0.9 {
+                -8.0
+            } else if ang.sin() > 0.9 {
+                10.0
+            } else {
+                0.0
+            };
+            let dim = table[i].is_none() && drill[i].is_none();
+            h.push_str(&format!(
+                r#"<text class="radar-label{}" x="{lx:.1}" y="{:.1}" text-anchor="{anchor}"><tspan x="{lx:.1}">{a}</tspan><tspan x="{lx:.1}" dy="12">{b}</tspan></text>"#,
+                if dim { " dim" } else { "" },
+                ly + dy - 2.0
+            ));
+        }
+        h.push_str("</svg>");
+        h.push_str(r#"<figcaption class="radar-legend">"#);
+        if has_table {
+            h.push_str(&format!(
+                r#"<span class="radar-key radar-table"><i></i>TABLE TAKE RATE{MIDDOT}<b>{}</b></span>"#,
+                avg(&table)
+            ));
+        }
+        if has_drill {
+            h.push_str(&format!(
+                r#"<span class="radar-key radar-drill"><i></i>DRILL ACCURACY{MIDDOT}<b>{}</b></span>"#,
+                avg(&drill)
+            ));
+        }
+        h.push_str("</figcaption></figure>");
         h
     }
 
