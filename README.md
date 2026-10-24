@@ -43,7 +43,8 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
 
 - **Speed**: a drill. One triple at a time; swipe right if it is a set, left
   if it is not (or use the buttons, or the arrow keys). A round is twenty
-  triples against the clock and a wrong swipe adds two seconds. Half the
+  triples against the clock and a wrong swipe adds two seconds. Beating your
+  best time rains confetti; falling short bleeds red down the screen. Half the
   triples are sets and most of the rest are near misses, where three of the
   four attributes follow the rule. Every answer is timed, and the profile
   gains a Speed Drill section: accuracy, median and 90th percentile reaction
@@ -72,7 +73,9 @@ passed over when it was out and you took a different one, or you dealt while
 it was out. A radar at the top of the report has one axis per kind of set
 (same or mixed count, shape, colour and shading) with your table take rate
 and your drill accuracy drawn over it as two shapes. The profile is kept on
-the device and can be reset from the panel.
+the device and can be reset from the panel. The report follows the mode: in
+Speed it shows the drill, everywhere else the table, and the reset button
+clears only the part on show.
 
 The choice of theme is remembered and applied before the first paint. Games in
 progress are saved too.

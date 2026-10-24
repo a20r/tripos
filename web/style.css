@@ -1072,10 +1072,43 @@ body {
 @keyframes radar-in { from { transform: scale(0.15); opacity: 0; } }
 @keyframes radar-dot { from { opacity: 0; } }
 
+/* ---------- Round-end effects ---------- */
+.fx { position: fixed; inset: 0; z-index: 60; pointer-events: none; overflow: hidden; }
+.confetti i {
+  position: absolute;
+  top: -24px;
+  left: var(--x);
+  width: var(--w);
+  height: var(--h);
+  background: var(--c);
+  border-radius: 2px;
+  box-shadow: 0 0 6px var(--c);
+  opacity: 0;
+  animation: confetti-fall var(--t) cubic-bezier(0.25, 0.6, 0.4, 1) var(--d) forwards;
+}
+@keyframes confetti-fall {
+  0% { opacity: 1; transform: translate3d(0, 0, 0) rotate(0deg); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(var(--dx), 110vh, 0) rotate(var(--r)); }
+}
+.bleed-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: rgba(150, 0, 24, 0.72);
+  filter: drop-shadow(0 6px 18px rgba(150, 0, 24, 0.45));
+  transform: translateY(-101%);
+  animation: bleed-down 1500ms cubic-bezier(0.4, 0, 0.6, 1) 150ms forwards, bleed-out 700ms ease 2700ms forwards;
+}
+@keyframes bleed-down { to { transform: translateY(0); } }
+@keyframes bleed-out { to { opacity: 0; } }
+
 @media (prefers-reduced-motion: reduce) {
   .rain::before, .title, .title::before, .title::after, .card.in, .card.bad, .card.hint .frame, .radar-shape, .radar-dot { animation: none !important; }
   .card { transition: none; }
   .flip, .flip > .table, .flip > .stats-panel, .st-bar i, .sheet, .sheet-scrim, .misses, .pile { transition: none; }
+  .fx { display: none; }
 }
 
 /* ---------- Classic theme: the clean card-table look ---------- */
