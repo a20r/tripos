@@ -181,6 +181,16 @@ impl SpeedStats {
         reading(self.log.iter())
     }
 
+    /// Correct answers per ten seconds of answering, over every logged swipe.
+    /// Wrong answers count toward the time but not the tally.
+    pub fn pace_per_10s(&self) -> Option<f64> {
+        let ms: u64 = self.log.iter().map(|a| a.ms as u64).sum();
+        (ms > 0).then(|| {
+            let correct = self.log.iter().filter(|a| a.correct).count() as f64;
+            correct * 10_000.0 / ms as f64
+        })
+    }
+
     /// Reaction time percentile over all correct answers.
     pub fn rt_percentile(&self, q: f64) -> Option<u32> {
         let mut rts: Vec<u32> = self
@@ -289,6 +299,10 @@ mod tests {
         assert_eq!(st.near_misses().n, 1);
         assert_eq!(st.near_misses().accuracy(), Some(0.0));
         assert_eq!(st.far_misses().n, 0);
+        // Two correct in 4.2 seconds of answering: 4.76 per ten seconds.
+        let pace = st.pace_per_10s().unwrap();
+        assert!((pace - 4.7619).abs() < 0.001, "{pace}");
+        assert_eq!(SpeedStats::default().pace_per_10s(), None);
         st.finish_round(30_000);
         st.finish_round(40_000);
         assert_eq!((st.rounds, st.best_ms), (2, 30_000));
