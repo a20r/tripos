@@ -41,6 +41,15 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
   and `?signal=local` swaps the signalling for a same-browser channel, which
   the tests use.
 
+- **Speed**: a drill. One triple at a time; swipe right if it is a set, left
+  if it is not (or use the buttons, or the arrow keys). A round is twenty
+  triples against the clock and a wrong swipe adds two seconds. Half the
+  triples are sets and most of the rest are near misses, where three of the
+  four attributes follow the rule. Every answer is timed, and the profile
+  gains a Speed Drill section: accuracy, median and 90th percentile reaction
+  time, how often you swipe sets away, how often near misses fool you, and
+  which kinds of set you spot quickest and slowest.
+
 Three themes, also under **OPTIONS** (`T` cycles them):
 
 - **Neon**: the Blade Runner look, pink, cyan and violet on near-black.

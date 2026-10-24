@@ -8,6 +8,7 @@ pub mod card;
 pub mod daily;
 pub mod game;
 pub mod rng;
+pub mod speed;
 pub mod stats;
 
 pub use card::{find_sets, has_set, is_set, third, Card, DECK_SIZE};

@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tripos_engine::speed::{Answer, SpeedStats};
 use tripos_engine::{Stats, Tally};
 
 pub const THEME_KEY: &str = "tripos.theme";
@@ -12,6 +13,7 @@ pub const DAILY_KEY: &str = "tripos.daily.state";
 pub const DAILY_HIST_KEY: &str = "tripos.daily.history";
 pub const PARTY_PLAYERS_KEY: &str = "tripos.party.players";
 pub const STATS_KEY: &str = "tripos.stats";
+pub const SPEED_KEY: &str = "tripos.speed";
 
 /// A solo or daily game in progress: deck order, table, and the clock.
 #[derive(Clone, Serialize, Deserialize)]
@@ -36,6 +38,73 @@ pub struct TimedSave {
 
 /// Best time in milliseconds per daily date key.
 pub type History = HashMap<String, u32>;
+
+/// One answered speed-drill triple.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AnswerSave {
+    /// Comma-joined category keys; empty for a non-set.
+    #[serde(default)]
+    pub k: String,
+    pub ms: u32,
+    pub ok: bool,
+    pub set: bool,
+    #[serde(default)]
+    pub near: bool,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct SpeedSave {
+    pub v: u32,
+    #[serde(default)]
+    pub rounds: u32,
+    #[serde(default)]
+    pub best_ms: u32,
+    #[serde(default)]
+    pub log: Vec<AnswerSave>,
+}
+
+impl SpeedSave {
+    pub fn from_stats(s: &SpeedStats) -> SpeedSave {
+        SpeedSave {
+            v: 1,
+            rounds: s.rounds,
+            best_ms: s.best_ms,
+            log: s
+                .log
+                .iter()
+                .map(|a| AnswerSave {
+                    k: a.keys.join(","),
+                    ms: a.ms,
+                    ok: a.correct,
+                    set: a.is_set,
+                    near: a.near,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn into_stats(self) -> SpeedStats {
+        SpeedStats {
+            rounds: self.rounds,
+            best_ms: self.best_ms,
+            log: self
+                .log
+                .into_iter()
+                .map(|a| Answer {
+                    keys: if a.k.is_empty() {
+                        Vec::new()
+                    } else {
+                        a.k.split(',').map(str::to_string).collect()
+                    },
+                    ms: a.ms,
+                    correct: a.ok,
+                    is_set: a.set,
+                    near: a.near,
+                })
+                .collect(),
+        }
+    }
+}
 
 /// Lifetime play profile: per-category found, seen and search time.
 #[derive(Clone, Default, Serialize, Deserialize)]

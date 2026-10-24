@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
+use tripos_engine::speed::{self, SpeedStats, Trial};
 use tripos_engine::{daily, Card, Claim, Game, Rng, Stats};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -53,6 +54,7 @@ pub enum Mode {
     Party,
     Daily,
     Online,
+    Speed,
 }
 
 impl Mode {
@@ -62,6 +64,7 @@ impl Mode {
             Mode::Party => "party",
             Mode::Daily => "daily",
             Mode::Online => "online",
+            Mode::Speed => "speed",
         }
     }
     fn from_key(s: &str) -> Mode {
@@ -69,16 +72,70 @@ impl Mode {
             "party" => Mode::Party,
             "daily" => Mode::Daily,
             "online" => Mode::Online,
+            "speed" => Mode::Speed,
             _ => Mode::Solo,
         }
     }
-    /// Solo and Daily race a clock; Party and Online keep score.
+    /// Solo and Daily race the table clock; Party and Online keep score; Speed has its own clock.
     fn is_timed(self) -> bool {
-        !matches!(self, Mode::Party | Mode::Online)
+        !matches!(self, Mode::Party | Mode::Online | Mode::Speed)
     }
 }
 
-const MODES: [Mode; 4] = [Mode::Solo, Mode::Party, Mode::Daily, Mode::Online];
+const MODES: [Mode; 5] = [
+    Mode::Solo,
+    Mode::Party,
+    Mode::Daily,
+    Mode::Online,
+    Mode::Speed,
+];
+
+/// How far a swipe must travel to count as an answer.
+const SWIPE_PX: f64 = 70.0;
+
+/// The speed drill: a stack of triples answered one at a time against a clock.
+struct Speed {
+    /// Empty placeholder so the shared table code has something to read.
+    game: Game,
+    trials: Vec<Trial>,
+    pos: usize,
+    started: bool,
+    over: bool,
+    start_at: f64,
+    shown_at: f64,
+    penalty: u32,
+    correct: u32,
+    rts: Vec<u32>,
+    total: u32,
+}
+
+impl Speed {
+    fn idle() -> Speed {
+        Speed {
+            game: Game::from_deck(Vec::new()),
+            trials: Vec::new(),
+            pos: 0,
+            started: false,
+            over: false,
+            start_at: 0.0,
+            shown_at: 0.0,
+            penalty: 0,
+            correct: 0,
+            rts: Vec::new(),
+            total: 0,
+        }
+    }
+
+    fn clock(&self) -> u32 {
+        if !self.started {
+            return 0;
+        }
+        if self.over {
+            return self.total;
+        }
+        ((dom::now() - self.start_at).max(0.0) as u32).saturating_add(self.penalty)
+    }
+}
 
 /// What travels over the data channel. The host owns the game: guests ask,
 /// the host applies and broadcasts, and both sides replay the same moves on
@@ -308,6 +365,8 @@ enum Overlay {
     None,
     Rules,
     Done,
+    /// The speed drill's GO card.
+    SpeedStart,
 }
 
 struct Els {
@@ -335,7 +394,9 @@ struct Els {
     options_summary: HtmlElement,
     new_game: HtmlButtonElement,
     seg_players: HtmlElement,
-    mode_btns: [HtmlButtonElement; 4],
+    mode_btns: [HtmlButtonElement; 5],
+    speed_card: HtmlElement,
+    speed_stack: HtmlElement,
     mic: HtmlButtonElement,
     lobby: HtmlElement,
     lobby_title: HtmlElement,
@@ -394,6 +455,10 @@ pub struct App {
     online: Online,
     /// Transports closed from inside their own event handler; freed on the next tick.
     dead_nets: Vec<Rc<Net>>,
+    speed: Speed,
+    speed_stats: SpeedStats,
+    /// An in-flight swipe: pointer id, start x, current dx.
+    drag: Option<(i32, f64, f64)>,
 }
 
 pub fn boot() {
@@ -427,7 +492,10 @@ pub fn boot() {
             dom::btn("mode-party"),
             dom::btn("mode-daily"),
             dom::btn("mode-online"),
+            dom::btn("mode-speed"),
         ],
+        speed_card: dom::el("speed-card"),
+        speed_stack: dom::el("speed-stack"),
         mic: dom::btn("mic"),
         lobby: dom::el("lobby"),
         lobby_title: dom::el("lobby-title"),
@@ -501,6 +569,9 @@ pub fn boot() {
         options_open: false,
         online: Online::idle(),
         dead_nets: Vec::new(),
+        speed: Speed::idle(),
+        speed_stats: SpeedStats::default(),
+        drag: None,
     }));
     {
         let mut a = app.borrow_mut();
@@ -526,6 +597,9 @@ pub fn boot() {
     a.history = parse(dom::local_get(DAILY_HIST_KEY)).unwrap_or_default();
     a.stats = parse::<StatsSave>(dom::local_get(STATS_KEY))
         .map(StatsSave::into_stats)
+        .unwrap_or_default();
+    a.speed_stats = parse::<SpeedSave>(dom::local_get(SPEED_KEY))
+        .map(SpeedSave::into_stats)
         .unwrap_or_default();
     let theme = dom::local_get(THEME_KEY).unwrap_or_default();
     a.set_theme(Theme::from_key(&theme), true);
@@ -599,6 +673,29 @@ fn wire_events(app: &Rc<RefCell<App>>) {
         doc.add_event_listener_with_callback("visibilitychange", on_vis.as_ref().unchecked_ref());
     on_vis.forget();
 
+    // Swipes on the speed card. Pointer capture keeps the drag even when the
+    // finger leaves the card.
+    let card = app.borrow().els.speed_card.clone();
+    let weak = Rc::downgrade(app);
+    let on_down = Closure::wrap(Box::new(move |e: web_sys::PointerEvent| {
+        with_app(&weak, |a| a.swipe_start(&e));
+    }) as Box<dyn FnMut(web_sys::PointerEvent)>);
+    let _ = card.add_event_listener_with_callback("pointerdown", on_down.as_ref().unchecked_ref());
+    on_down.forget();
+    let weak = Rc::downgrade(app);
+    let on_move = Closure::wrap(Box::new(move |e: web_sys::PointerEvent| {
+        with_app(&weak, |a| a.swipe_move(&e));
+    }) as Box<dyn FnMut(web_sys::PointerEvent)>);
+    let _ = card.add_event_listener_with_callback("pointermove", on_move.as_ref().unchecked_ref());
+    on_move.forget();
+    let weak = Rc::downgrade(app);
+    let on_up = Closure::wrap(Box::new(move |e: web_sys::PointerEvent| {
+        with_app(&weak, |a| a.swipe_end(&e));
+    }) as Box<dyn FnMut(web_sys::PointerEvent)>);
+    let _ = card.add_event_listener_with_callback("pointerup", on_up.as_ref().unchecked_ref());
+    let _ = card.add_event_listener_with_callback("pointercancel", on_up.as_ref().unchecked_ref());
+    on_up.forget();
+
     let weak = Rc::downgrade(app);
     let on_hide = Closure::wrap(Box::new(move || {
         with_app(&weak, |a| {
@@ -622,6 +719,11 @@ fn fmt_secs(ms: u32) -> String {
     format!("+{}S", ms / 1000)
 }
 
+/// Seconds with one decimal, for reaction times and the speed clock.
+fn fmt_tenths(ms: u32) -> String {
+    format!("{}.{}S", ms / 1000, (ms % 1000) / 100)
+}
+
 impl App {
     // ---------- state access ----------
 
@@ -629,7 +731,7 @@ impl App {
         match self.mode {
             Mode::Solo => self.solo.as_ref(),
             Mode::Daily => self.daily.as_ref(),
-            Mode::Party | Mode::Online => None,
+            Mode::Party | Mode::Online | Mode::Speed => None,
         }
     }
 
@@ -637,7 +739,7 @@ impl App {
         match self.mode {
             Mode::Solo => self.solo.as_mut(),
             Mode::Daily => self.daily.as_mut(),
-            Mode::Party | Mode::Online => None,
+            Mode::Party | Mode::Online | Mode::Speed => None,
         }
     }
 
@@ -645,6 +747,7 @@ impl App {
         match self.mode {
             Mode::Party => &self.party.game,
             Mode::Online => &self.online.game,
+            Mode::Speed => &self.speed.game,
             _ => &self.timed().expect("timed game").game,
         }
     }
@@ -653,6 +756,7 @@ impl App {
         match self.mode {
             Mode::Party => &mut self.party.game,
             Mode::Online => &mut self.online.game,
+            Mode::Speed => &mut self.speed.game,
             _ => &mut self.timed_mut().expect("timed game").game,
         }
     }
@@ -661,6 +765,7 @@ impl App {
         match self.mode {
             Mode::Party => self.party.over,
             Mode::Online => self.online.over || !self.online.started,
+            Mode::Speed => self.speed.over || !self.speed.started,
             _ => self.timed().map(|t| t.over).unwrap_or(false),
         }
     }
@@ -735,9 +840,12 @@ impl App {
         dom::set_hidden(&self.els.hint, !m.is_timed());
         dom::set_hidden(&self.els.seg_players, m != Mode::Party);
         dom::set_hidden(&self.els.mic, m != Mode::Online);
+        dom::set_hidden(&self.els.deal, m == Mode::Speed);
+        self.els.shuffle.set_disabled(m == Mode::Speed);
         self.els.new_game.set_text_content(Some(match m {
             Mode::Daily => "RESTART",
             Mode::Party | Mode::Online => "NEW GAME",
+            Mode::Speed => "NEW ROUND",
             Mode::Solo => "NEW DEAL",
         }));
         self.ensure_game();
@@ -752,6 +860,8 @@ impl App {
                 self.lobby_reset();
             }
             self.say(&self.idle_line());
+        } else if m == Mode::Speed {
+            self.speed_new_round();
         } else if self.is_over() {
             self.show_done();
         } else {
@@ -791,7 +901,7 @@ impl App {
                     self.daily = Some(Timed::new(daily::daily(&today), Some(today)));
                 }
             }
-            Mode::Party | Mode::Online => {}
+            Mode::Party | Mode::Online | Mode::Speed => {}
         }
     }
 
@@ -801,6 +911,7 @@ impl App {
             Mode::Party => "CALL IT. PICK THREE. SEVEN SECONDS.",
             Mode::Daily => "ONE DECK A DAY, THE SAME FOR EVERYONE",
             Mode::Online => "TWO DEVICES, ONE DECK, LIVE VOICE",
+            Mode::Speed => "SET OR NOT. HOW FAST CAN YOU TELL?",
         };
         self.els.tagline.set_text_content(Some(line));
     }
@@ -810,6 +921,7 @@ impl App {
             Mode::Party => "TAP YOUR BAR TO CALL A SET".to_string(),
             Mode::Online if !self.online.started => "HOST A ROOM OR JOIN ONE".to_string(),
             Mode::Online => "FIRST TO TAP A SET TAKES IT".to_string(),
+            Mode::Speed => "SWIPE RIGHT FOR A SET, LEFT FOR NOT".to_string(),
             _ => "TAP THREE CARDS THAT MAKE A SET".to_string(),
         }
     }
@@ -837,6 +949,10 @@ impl App {
                 self.party.scores = [0; 4];
                 self.party.holder = None;
                 self.party.over = false;
+            }
+            Mode::Speed => {
+                self.speed_new_round();
+                return;
             }
             Mode::Online => {
                 // Only the host deals; a guest just clears the end card.
@@ -896,6 +1012,14 @@ impl App {
 
     fn tick(&mut self) {
         self.dead_nets.clear();
+        if self.mode == Mode::Speed {
+            if self.speed.started && !self.speed.over {
+                self.els
+                    .stat_a
+                    .set_text_content(Some(&fmt_tenths(self.speed.clock())));
+            }
+            return;
+        }
         if self.mode.is_timed() {
             let total = self.timed().map(|t| t.total()).unwrap_or(0);
             if total / 1000 != self.shown_time / 1000 {
@@ -990,6 +1114,24 @@ impl App {
     fn render_stats(&mut self) {
         let e = &self.els;
         match self.mode {
+            Mode::Speed => {
+                e.stat_a_label.set_text_content(Some("TIME"));
+                e.stat_b_label.set_text_content(Some("DONE"));
+                e.stat_c_label.set_text_content(Some("BEST"));
+                e.stat_a
+                    .set_text_content(Some(&fmt_tenths(self.speed.clock())));
+                e.stat_b.set_text_content(Some(&format!(
+                    "{}/{}",
+                    self.speed.pos.min(speed::ROUND_LEN),
+                    speed::ROUND_LEN
+                )));
+                let best = self.speed_stats.best_ms;
+                e.stat_c.set_text_content(Some(&if best > 0 {
+                    fmt_tenths(best)
+                } else {
+                    "-".to_string()
+                }));
+            }
             Mode::Online => {
                 e.stat_a_label.set_text_content(Some("YOU"));
                 e.stat_b_label.set_text_content(Some("THEM"));
@@ -1136,8 +1278,9 @@ impl App {
             "<li><b>Party</b>: tap your bar to call a set, then pick three within seven seconds. Right +1, wrong or late &minus;1.</li>",
             "<li>The shuffle button rearranges the table to give you a fresh look. It is free.</li>",
             "<li>The profile button flips the table over to show which kinds of set you take and which you pass over, across all your Solo and Daily games.</li>",
-            "<li>Mode and theme are under <b>OPTIONS</b> at the bottom.</li>",
-            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>P</b> profile, <b>O</b> options, <b>1</b> to <b>4</b> call.</li>",
+            "<li><b>Speed</b>: one triple at a time. Swipe right if it is a set, left if not. Twenty triples against the clock; a wrong swipe adds two seconds. The profile shows your reaction times.</li>",
+            "<li>Mode and theme are under <b>OPTIONS</b> at the top.</li>",
+            "<li>Keys: letters pick cards, <b>H</b> hint, <b>D</b> deal, <b>N</b> new, <b>T</b> theme, <b>P</b> profile, <b>O</b> options, <b>1</b> to <b>4</b> call, arrow keys answer in Speed.</li>",
             "</ul>"
         );
         self.show_overlay(
@@ -1152,6 +1295,36 @@ impl App {
 
     fn show_done(&mut self) {
         match self.mode {
+            Mode::Speed => {
+                let sp = &self.speed;
+                let mut rts = sp.rts.clone();
+                rts.sort_unstable();
+                let p50 = speed::percentile(&rts, 0.5)
+                    .map(fmt_tenths)
+                    .unwrap_or_else(|| "-".into());
+                let best = self.speed_stats.best_ms;
+                let kicker = if sp.total <= best {
+                    "NEW BEST"
+                } else {
+                    "STACK CLEARED"
+                };
+                let sub = format!(
+                    "{}/{} CORRECT{MIDDOT}MEDIAN REACTION {p50}{MIDDOT}PENALTIES {}<br>BEST {}",
+                    sp.correct,
+                    speed::ROUND_LEN,
+                    fmt_tenths(sp.penalty),
+                    fmt_tenths(best)
+                );
+                let title = fmt_tenths(sp.total);
+                self.show_overlay(
+                    Overlay::Done,
+                    kicker,
+                    &title,
+                    &sub,
+                    "AGAIN",
+                    Some("PROFILE"),
+                );
+            }
             Mode::Online => {
                 let me = self.online.me;
                 let (mine, theirs) = (self.online.scores[me], self.online.scores[1 - me]);
@@ -1282,6 +1455,8 @@ impl App {
                 self.share_plain(text, self.els.lobby_share.clone());
             }
             "mic" => self.toggle_mic(),
+            "speed-yes" => self.speed_answer(true),
+            "speed-no" => self.speed_answer(false),
             "players" => {
                 let n = btn
                     .get_attribute("data-n")
@@ -1308,9 +1483,11 @@ impl App {
             "overlay-primary" => match self.overlay {
                 Overlay::Rules => self.close_overlay(),
                 Overlay::Done => self.new_game(),
+                Overlay::SpeedStart => self.speed_go(),
                 Overlay::None => {}
             },
             "overlay-secondary" if self.mode == Mode::Daily => self.share(),
+            "overlay-secondary" if self.mode == Mode::Speed => self.open_stats(),
             _ => {}
         }
     }
@@ -1354,6 +1531,8 @@ impl App {
                     self.on_action("overlay-primary", &self.els.primary.clone());
                 }
             }
+            "arrowright" => self.speed_answer(true),
+            "arrowleft" => self.speed_answer(false),
             "t" => self.set_theme(self.theme.next(), false),
             "p" => self.toggle_stats(),
             "o" => self.toggle_options(),
@@ -1530,6 +1709,7 @@ impl App {
             return;
         }
         match self.mode {
+            Mode::Speed => return,
             Mode::Online => {
                 if !self.online.started {
                     return;
@@ -1903,8 +2083,9 @@ impl App {
         let slowest = timed.iter().max_by_key(|(_, ms)| *ms).copied();
 
         let mut h = String::with_capacity(6000);
-        h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE&nbsp;&middot;&nbsp;SOLO AND DAILY</p>"#);
+        h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE</p>"#);
         h.push_str(r#"<h2 class="st-title">BASELINE REPORT</h2>"#);
+        h.push_str(r#"<h3 class="st-h">TABLE PLAY&nbsp;&middot;&nbsp;SOLO AND DAILY</h3>"#);
         if st.found == 0 {
             h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
         } else {
@@ -1995,11 +2176,309 @@ impl App {
         }
         h.push_str("</div>");
         h.push_str(r#"<p class="st-note">BAR: HOW OFTEN YOU TAKE THAT KIND OF SET WHEN IT IS ON THE TABLE. LINE: YOUR OVERALL RATE. A SET IS PASSED OVER WHEN IT WAS OUT AND YOU TOOK A DIFFERENT ONE.</p>"#);
+        h.push_str(&self.profile_speed_html(&SECTIONS));
         h.push_str(&format!(
             r#"<div class="st-actions"><button class="btn btn-primary" type="button" data-act="stats">BACK TO THE TABLE</button><button class="btn" type="button" data-act="stats-reset">{}</button></div>"#,
             if self.reset_armed { "SURE? TAP AGAIN" } else { "RESET PROFILE" }
         ));
         self.els.stats_body.set_inner_html(&h);
+    }
+
+    // ---------- speed drill ----------
+
+    fn save_speed(&self) {
+        dom::local_set(
+            SPEED_KEY,
+            &to_json(&SpeedSave::from_stats(&self.speed_stats)),
+        );
+    }
+
+    fn speed_new_round(&mut self) {
+        self.cancel_pending();
+        self.locked = false;
+        self.drag = None;
+        let mut rng = Rng::new(dom::random_seed());
+        self.speed = Speed::idle();
+        self.speed.trials = speed::deal_round(&mut rng);
+        self.render_speed_card();
+        self.render_stats();
+        let best = self.speed_stats.best_ms;
+        let sub = format!(
+            "SWIPE RIGHT IF THE THREE ARE A SET, LEFT IF THEY ARE NOT. {} TRIPLES. A WRONG SWIPE ADDS {}.{}",
+            speed::ROUND_LEN,
+            fmt_tenths(speed::WRONG_MS),
+            if best > 0 { format!("<br>BEST {}", fmt_tenths(best)) } else { String::new() }
+        );
+        self.show_overlay(
+            Overlay::SpeedStart,
+            "SPEED DRILL",
+            "SET OR NOT",
+            &sub,
+            "GO",
+            None,
+        );
+        self.say(&self.idle_line());
+    }
+
+    fn speed_go(&mut self) {
+        if self.mode != Mode::Speed || self.speed.started {
+            return;
+        }
+        self.speed.started = true;
+        let now = dom::now();
+        self.speed.start_at = now;
+        self.speed.shown_at = now;
+        self.close_overlay();
+        self.say("GO");
+    }
+
+    fn speed_live(&self) -> bool {
+        self.mode == Mode::Speed
+            && self.speed.started
+            && !self.speed.over
+            && self.overlay == Overlay::None
+            && !self.stats_open
+            && !self.options_open
+    }
+
+    fn render_speed_card(&self) {
+        let mut html = String::new();
+        if let Some(t) = self.speed.trials.get(self.speed.pos) {
+            for c in t.cards {
+                html.push_str(&format!(
+                    r#"<div class="speed-face" data-card="{}">{}</div>"#,
+                    c.0,
+                    cards::face(c)
+                ));
+            }
+        }
+        self.els.speed_card.set_inner_html(&html);
+        let _ = self.els.speed_card.set_attribute("style", "");
+        dom::set_class(&self.els.speed_card, "lean-yes", false);
+        dom::set_class(&self.els.speed_card, "lean-no", false);
+    }
+
+    /// Answers the current triple: right (true) for a set, left for not.
+    fn speed_answer(&mut self, yes: bool) {
+        if !self.speed_live() {
+            return;
+        }
+        let Some(trial) = self.speed.trials.get(self.speed.pos).copied() else {
+            return;
+        };
+        let now = dom::now();
+        let rt = (now - self.speed.shown_at).max(0.0) as u32;
+        let ok = yes == trial.is_set;
+        self.speed_stats.record(&trial, rt, ok);
+        if ok {
+            self.speed.correct += 1;
+            self.speed.rts.push(rt);
+        } else {
+            self.speed.penalty += speed::WRONG_MS;
+        }
+        self.fly_card(yes, ok);
+        self.speed.pos += 1;
+        self.drag = None;
+        if self.speed.pos >= speed::ROUND_LEN {
+            self.speed.over = true;
+            self.speed.total =
+                ((now - self.speed.start_at).max(0.0) as u32).saturating_add(self.speed.penalty);
+            self.speed_stats.finish_round(self.speed.total);
+            self.save_speed();
+            self.render_speed_card();
+            self.render_stats();
+            self.show_done();
+            return;
+        }
+        self.speed.shown_at = dom::now();
+        self.render_speed_card();
+        self.render_stats();
+        self.save_speed();
+        let line = match (ok, trial.is_set) {
+            (true, true) => "SET. RIGHT.",
+            (true, false) => "NOT A SET. RIGHT.",
+            (false, _) => "WRONG. +2S",
+        };
+        self.say(line);
+    }
+
+    /// The answered card flies off as a ghost so the next one is live at once.
+    fn fly_card(&self, yes: bool, ok: bool) {
+        let stack = &self.els.speed_stack;
+        for old in dom::children(stack) {
+            if old.class_list().contains("speed-ghost") {
+                old.remove();
+            }
+        }
+        if let Ok(ghost) = self.els.speed_card.clone_node_with_deep(true) {
+            if let Ok(ghost) = ghost.dyn_into::<HtmlElement>() {
+                ghost.set_id("");
+                let _ = ghost.set_attribute("aria-hidden", "true");
+                let _ = ghost.set_attribute("style", "");
+                ghost.set_class_name(&format!(
+                    "speed-card speed-ghost {} {}",
+                    if yes { "fly-yes" } else { "fly-no" },
+                    if ok { "good" } else { "bad" }
+                ));
+                let _ = stack.append_child(&ghost);
+            }
+        }
+    }
+
+    fn swipe_start(&mut self, e: &web_sys::PointerEvent) {
+        if !self.speed_live() {
+            return;
+        }
+        let card = &self.els.speed_card;
+        let _ = card.set_pointer_capture(e.pointer_id());
+        dom::set_class(card, "dragging", true);
+        self.drag = Some((e.pointer_id(), e.client_x() as f64, 0.0));
+    }
+
+    fn swipe_move(&mut self, e: &web_sys::PointerEvent) {
+        let Some((id, x0, _)) = self.drag else { return };
+        if e.pointer_id() != id {
+            return;
+        }
+        let dx = e.client_x() as f64 - x0;
+        self.drag = Some((id, x0, dx));
+        let card = &self.els.speed_card;
+        dom::set_var(card, "--dx", &format!("{dx:.0}px"));
+        dom::set_var(card, "--rot", &format!("{:.1}deg", dx / 18.0));
+        dom::set_class(card, "lean-yes", dx > SWIPE_PX / 2.0);
+        dom::set_class(card, "lean-no", dx < -SWIPE_PX / 2.0);
+    }
+
+    fn swipe_end(&mut self, e: &web_sys::PointerEvent) {
+        let Some((id, _, dx)) = self.drag else { return };
+        if e.pointer_id() != id {
+            return;
+        }
+        self.drag = None;
+        let card = &self.els.speed_card;
+        dom::set_class(card, "dragging", false);
+        if dx.abs() >= SWIPE_PX {
+            self.speed_answer(dx > 0.0);
+        } else {
+            let _ = card.set_attribute("style", "");
+            dom::set_class(card, "lean-yes", false);
+            dom::set_class(card, "lean-no", false);
+        }
+    }
+
+    /// The speed-drill block of the profile: reaction times and accuracy by kind.
+    fn profile_speed_html(&self, sections: &[(&str, [&str; 4])]) -> String {
+        let st = &self.speed_stats;
+        let all = st.overall();
+        if all.n == 0 {
+            return String::new();
+        }
+        let pct = |r: f64| (r * 100.0).round() as u32;
+        let mut h = String::with_capacity(3000);
+        h.push_str(r#"<section class="st-speed"><h3 class="st-h">SPEED DRILL</h3>"#);
+        h.push_str(&format!(
+            r#"<p class="st-sum">{} {}{MIDDOT}{} {}{MIDDOT}ACCURACY {}%{MIDDOT}MEDIAN REACTION {}{MIDDOT}P90 {}{MIDDOT}BEST ROUND {}</p>"#,
+            st.rounds,
+            if st.rounds == 1 { "ROUND" } else { "ROUNDS" },
+            all.n,
+            if all.n == 1 { "SWIPE" } else { "SWIPES" },
+            pct(all.accuracy().unwrap_or(0.0)),
+            st.rt_percentile(0.5).map(fmt_tenths).unwrap_or_else(|| "-".into()),
+            st.rt_percentile(0.9).map(fmt_tenths).unwrap_or_else(|| "-".into()),
+            if st.best_ms > 0 { fmt_tenths(st.best_ms) } else { "-".into() }
+        ));
+        let sets = st.sets();
+        let near = st.near_misses();
+        let far = st.far_misses();
+        let miss_rate = |r: &speed::Reading| r.accuracy().map(|a| pct(1.0 - a));
+        h.push_str(r#"<div class="st-verdicts">"#);
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">SETS YOU MISS</span>{}</p>"#,
+            match miss_rate(&sets) {
+                Some(m) => format!(
+                    "<b>{m}%</b> OF SETS SWIPED AWAY <span class=\"st-dim\">({}/{})</span>",
+                    sets.n - sets.correct,
+                    sets.n
+                ),
+                None => "NO SETS SEEN YET".to_string(),
+            }
+        ));
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">FALSE ALARMS</span>{}</p>"#,
+            match (miss_rate(&near), miss_rate(&far)) {
+                (Some(a), Some(b)) =>
+                    format!("<b>{a}%</b> ON NEAR MISSES{MIDDOT}<b>{b}%</b> ON CLEAR NON-SETS"),
+                (Some(a), None) => format!("<b>{a}%</b> ON NEAR MISSES"),
+                (None, Some(b)) => format!("<b>{b}%</b> ON CLEAR NON-SETS"),
+                _ => "NO NON-SETS SEEN YET".to_string(),
+            }
+        ));
+        // Fastest and slowest kinds of set to recognise, among kinds seen enough.
+        let readings: Vec<(&str, speed::Reading)> = sections
+            .iter()
+            .flat_map(|(_, keys)| keys.iter().copied())
+            .map(|k| (k, st.for_key(k)))
+            .filter(|(_, r)| r.correct >= MIN_FOUND)
+            .collect();
+        let fastest = readings
+            .iter()
+            .filter_map(|(k, r)| r.p50.map(|p| (*k, p)))
+            .min_by_key(|x| x.1);
+        let slowest = readings
+            .iter()
+            .filter_map(|(k, r)| r.p50.map(|p| (*k, p)))
+            .max_by_key(|x| x.1);
+        h.push_str(&format!(
+            r#"<p class="st-v"><span class="st-vl">QUICKEST TO SPOT</span>{}</p>"#,
+            match (fastest, slowest) {
+                (Some((fk, fp)), Some((sk, sp))) if fk != sk => format!(
+                    "<b>{}</b> {}{MIDDOT}SLOWEST <b>{}</b> {}",
+                    self.cat_label(fk),
+                    fmt_tenths(fp),
+                    self.cat_label(sk),
+                    fmt_tenths(sp)
+                ),
+                _ => "NOT ENOUGH SETS SEEN YET".to_string(),
+            }
+        ));
+        h.push_str("</div>");
+        let max_p50 = readings
+            .iter()
+            .filter_map(|(_, r)| r.p50)
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        h.push_str(r#"<div class="st-grid">"#);
+        for (title, keys) in sections {
+            h.push_str(&format!(r#"<section class="st-sec"><h3>{title}</h3>"#));
+            for key in keys {
+                let r = st.for_key(key);
+                let (w, num) = match (r.p50, r.accuracy()) {
+                    (Some(p), Some(a)) => (
+                        (p as f64 / max_p50 as f64 * 100.0).round() as u32,
+                        format!("{}{MIDDOT}{}%", fmt_tenths(p), pct(a)),
+                    ),
+                    (None, Some(a)) => (0, format!("-{MIDDOT}{}%", pct(a))),
+                    _ => (0, "-".to_string()),
+                };
+                let cls = if fastest.map(|f| f.0 == *key).unwrap_or(false) {
+                    " lean"
+                } else if slowest.map(|s| s.0 == *key).unwrap_or(false) {
+                    " miss"
+                } else {
+                    ""
+                };
+                h.push_str(&format!(
+                    r#"<div class="st-row{cls}"><span class="st-label">{}</span><span class="st-bar" style="--w:{w}%"><i></i></span><span class="st-num st-wide">{num}</span></div>"#,
+                    self.cat_label(key)
+                ));
+            }
+            h.push_str("</section>");
+        }
+        h.push_str("</div>");
+        h.push_str(r#"<p class="st-note">BAR: MEDIAN TIME TO SPOT THAT KIND OF SET IN THE DRILL, LONGER IS SLOWER. PERCENT: HOW OFTEN YOU SWIPED RIGHT ON IT.</p>"#);
+        h.push_str("</section>");
+        h
     }
 
     // ---------- deferred work ----------
