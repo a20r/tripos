@@ -47,8 +47,9 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
   triples are sets and most of the rest are near misses, where three of the
   four attributes follow the rule. Every answer is timed, and the profile
   gains a Speed Drill section: accuracy, median and 90th percentile reaction
-  time, how often you swipe sets away, how often near misses fool you, and
-  which kinds of set you spot quickest and slowest.
+  time, pace (correct answers per ten seconds), how often you swipe sets
+  away, how often near misses fool you, and which kinds of set you spot
+  quickest and slowest.
 
 Three themes, also under **OPTIONS** (`T` cycles them):
 

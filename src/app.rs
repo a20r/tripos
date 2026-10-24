@@ -724,6 +724,14 @@ fn fmt_tenths(ms: u32) -> String {
     format!("{}.{}S", ms / 1000, (ms % 1000) / 100)
 }
 
+/// Correct answers per ten seconds of play, one decimal.
+fn fmt_pace(correct: u32, play_ms: u32) -> String {
+    if play_ms == 0 {
+        return "-".to_string();
+    }
+    format!("{:.1}", correct as f64 * 10_000.0 / play_ms as f64)
+}
+
 impl App {
     // ---------- state access ----------
 
@@ -1309,10 +1317,11 @@ impl App {
                     "STACK CLEARED"
                 };
                 let sub = format!(
-                    "{}/{} CORRECT{MIDDOT}MEDIAN REACTION {p50}{MIDDOT}PENALTIES {}<br>BEST {}",
+                    "{}/{} CORRECT{MIDDOT}MEDIAN REACTION {p50}{MIDDOT}PENALTIES {}{MIDDOT}PACE {} PER 10S<br>BEST {}",
                     sp.correct,
                     speed::ROUND_LEN,
                     fmt_tenths(sp.penalty),
+                    fmt_pace(sp.correct, sp.total.saturating_sub(sp.penalty)),
                     fmt_tenths(best)
                 );
                 let title = fmt_tenths(sp.total);
@@ -2377,7 +2386,7 @@ impl App {
         let mut h = String::with_capacity(3000);
         h.push_str(r#"<section class="st-speed"><h3 class="st-h">SPEED DRILL</h3>"#);
         h.push_str(&format!(
-            r#"<p class="st-sum">{} {}{MIDDOT}{} {}{MIDDOT}ACCURACY {}%{MIDDOT}MEDIAN REACTION {}{MIDDOT}P90 {}{MIDDOT}BEST ROUND {}</p>"#,
+            r#"<p class="st-sum">{} {}{MIDDOT}{} {}{MIDDOT}ACCURACY {}%{MIDDOT}MEDIAN REACTION {}{MIDDOT}P90 {}{MIDDOT}BEST ROUND {}{MIDDOT}PACE {} CORRECT PER 10S</p>"#,
             st.rounds,
             if st.rounds == 1 { "ROUND" } else { "ROUNDS" },
             all.n,
@@ -2385,7 +2394,8 @@ impl App {
             pct(all.accuracy().unwrap_or(0.0)),
             st.rt_percentile(0.5).map(fmt_tenths).unwrap_or_else(|| "-".into()),
             st.rt_percentile(0.9).map(fmt_tenths).unwrap_or_else(|| "-".into()),
-            if st.best_ms > 0 { fmt_tenths(st.best_ms) } else { "-".into() }
+            if st.best_ms > 0 { fmt_tenths(st.best_ms) } else { "-".into() },
+            st.pace_per_10s().map(|p| format!("{p:.1}")).unwrap_or_else(|| "-".into())
         ));
         let sets = st.sets();
         let near = st.near_misses();
