@@ -1334,6 +1334,7 @@ impl App {
                     fmt_tenths(best)
                 );
                 let title = fmt_tenths(sp.total);
+                let new_best = sp.total <= best;
                 self.show_overlay(
                     Overlay::Done,
                     kicker,
@@ -1342,6 +1343,11 @@ impl App {
                     "AGAIN",
                     Some("PROFILE"),
                 );
+                if new_best {
+                    self.confetti();
+                } else {
+                    self.bleed();
+                }
             }
             Mode::Online => {
                 let me = self.online.me;
@@ -2033,11 +2039,18 @@ impl App {
             self.render_profile();
             return;
         }
-        self.stats = Stats::default();
         self.reset_armed = false;
-        self.save_stats();
+        if self.mode == Mode::Speed {
+            self.speed_stats = SpeedStats::default();
+            self.save_speed();
+            self.render_stats();
+            self.announce("Drill stats reset.");
+        } else {
+            self.stats = Stats::default();
+            self.save_stats();
+            self.announce("Table stats reset.");
+        }
         self.render_profile();
-        self.announce("Profile reset.");
     }
 
     fn cat_label(&self, key: &str) -> String {
@@ -2108,102 +2121,117 @@ impl App {
         let mut h = String::with_capacity(6000);
         h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE</p>"#);
         h.push_str(r#"<h2 class="st-title">BASELINE REPORT</h2>"#);
-        h.push_str(&self.radar_html());
-        h.push_str(r#"<h3 class="st-h">TABLE PLAY&nbsp;&middot;&nbsp;SOLO AND DAILY</h3>"#);
-        if st.found == 0 {
-            h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
+        // The report follows the mode: the drill in Speed, the table elsewhere.
+        let speed_mode = self.mode == Mode::Speed;
+        h.push_str(&self.radar_html(!speed_mode, speed_mode));
+        if speed_mode {
+            let drill = self.profile_speed_html(&SECTIONS);
+            if drill.is_empty() {
+                h.push_str(r#"<h3 class="st-h">SPEED DRILL</h3><p class="st-sum">NO ROUNDS ON RECORD YET</p><p class="st-note">FINISH A ROUND AND THE DRILL REPORT APPEARS HERE.</p>"#);
+            } else {
+                h.push_str(&drill);
+            }
         } else {
-            h.push_str(&format!(
+            h.push_str(r#"<h3 class="st-h">TABLE PLAY&nbsp;&middot;&nbsp;SOLO AND DAILY</h3>"#);
+            if st.found == 0 {
+                h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
+            } else {
+                h.push_str(&format!(
                 r#"<p class="st-sum">{} FOUND{MIDDOT}{} PASSED OVER{MIDDOT}TAKE RATE {}%{MIDDOT}AVG FIND {}</p>"#,
                 plural(st.found, "SET", "SETS"),
                 st.seen.saturating_sub(st.found),
                 pct(overall),
                 st.avg_ms().map(secs).unwrap_or_else(|| "-".into())
             ));
-            h.push_str(&format!(
-                r#"<p class="st-sum st-dim">{}{MIDDOT}{}{MIDDOT}{}</p>"#,
-                plural(st.wrong, "WRONG PICK", "WRONG PICKS"),
-                plural(st.hints, "HINT", "HINTS"),
-                plural(st.bad_deals, "EARLY DEAL", "EARLY DEALS")
-            ));
-        }
-        if st.found < 5 {
-            h.push_str(r#"<p class="st-note st-warn">NOT MUCH DATA YET. THE REPORT SHARPENS AFTER A FEW DECKS OF SOLO OR DAILY.</p>"#);
-        }
-
-        let describe = |b: &tripos_engine::Bias| {
-            format!(
-                "<b>{}</b> {}% <span class=\"st-dim\">({}/{})</span>",
-                self.cat_label(&b.key),
-                pct(b.rate),
-                b.tally.found,
-                b.tally.seen
-            )
-        };
-        let join = |v: &[&tripos_engine::Bias]| {
-            if v.is_empty() {
-                "NO CLEAR LEAN YET".to_string()
-            } else {
-                v.iter()
-                    .map(|b| describe(b))
-                    .collect::<Vec<_>>()
-                    .join(MIDDOT)
-            }
-        };
-        h.push_str(r#"<div class="st-verdicts">"#);
-        h.push_str(&format!(
-            r#"<p class="st-v"><span class="st-vl">YOU LEAN TOWARD</span>{}</p>"#,
-            join(&leans)
-        ));
-        h.push_str(&format!(
-            r#"<p class="st-v"><span class="st-vl">YOU TEND TO MISS</span>{}</p>"#,
-            join(&misses)
-        ));
-        let speed = match (fastest, slowest) {
-            (Some((fk, fm)), Some((sk, sm))) if fk != sk => format!(
-                "<b>{}</b> {}{MIDDOT}SLOWEST <b>{}</b> {}",
-                self.cat_label(fk),
-                secs(fm),
-                self.cat_label(sk),
-                secs(sm)
-            ),
-            _ => "NOT ENOUGH TIMED FINDS YET".to_string(),
-        };
-        h.push_str(&format!(
-            r#"<p class="st-v"><span class="st-vl">FASTEST FINDS</span>{speed}</p>"#
-        ));
-        h.push_str("</div>");
-
-        h.push_str(r#"<div class="st-grid">"#);
-        for (title, keys) in SECTIONS {
-            h.push_str(&format!(r#"<section class="st-sec"><h3>{title}</h3>"#));
-            for key in keys {
-                let t = st.cats.get(key).copied().unwrap_or_default();
-                let cls = if leans.iter().any(|b| b.key == key) {
-                    " lean"
-                } else if misses.iter().any(|b| b.key == key) {
-                    " miss"
-                } else {
-                    ""
-                };
-                let (w, num) = match t.rate() {
-                    Some(r) => (pct(r), format!("{}/{}", t.found, t.seen)),
-                    None => (0, "-".to_string()),
-                };
                 h.push_str(&format!(
+                    r#"<p class="st-sum st-dim">{}{MIDDOT}{}{MIDDOT}{}</p>"#,
+                    plural(st.wrong, "WRONG PICK", "WRONG PICKS"),
+                    plural(st.hints, "HINT", "HINTS"),
+                    plural(st.bad_deals, "EARLY DEAL", "EARLY DEALS")
+                ));
+            }
+            if st.found < 5 {
+                h.push_str(r#"<p class="st-note st-warn">NOT MUCH DATA YET. THE REPORT SHARPENS AFTER A FEW DECKS OF SOLO OR DAILY.</p>"#);
+            }
+
+            let describe = |b: &tripos_engine::Bias| {
+                format!(
+                    "<b>{}</b> {}% <span class=\"st-dim\">({}/{})</span>",
+                    self.cat_label(&b.key),
+                    pct(b.rate),
+                    b.tally.found,
+                    b.tally.seen
+                )
+            };
+            let join = |v: &[&tripos_engine::Bias]| {
+                if v.is_empty() {
+                    "NO CLEAR LEAN YET".to_string()
+                } else {
+                    v.iter()
+                        .map(|b| describe(b))
+                        .collect::<Vec<_>>()
+                        .join(MIDDOT)
+                }
+            };
+            h.push_str(r#"<div class="st-verdicts">"#);
+            h.push_str(&format!(
+                r#"<p class="st-v"><span class="st-vl">YOU LEAN TOWARD</span>{}</p>"#,
+                join(&leans)
+            ));
+            h.push_str(&format!(
+                r#"<p class="st-v"><span class="st-vl">YOU TEND TO MISS</span>{}</p>"#,
+                join(&misses)
+            ));
+            let speed = match (fastest, slowest) {
+                (Some((fk, fm)), Some((sk, sm))) if fk != sk => format!(
+                    "<b>{}</b> {}{MIDDOT}SLOWEST <b>{}</b> {}",
+                    self.cat_label(fk),
+                    secs(fm),
+                    self.cat_label(sk),
+                    secs(sm)
+                ),
+                _ => "NOT ENOUGH TIMED FINDS YET".to_string(),
+            };
+            h.push_str(&format!(
+                r#"<p class="st-v"><span class="st-vl">FASTEST FINDS</span>{speed}</p>"#
+            ));
+            h.push_str("</div>");
+
+            h.push_str(r#"<div class="st-grid">"#);
+            for (title, keys) in SECTIONS {
+                h.push_str(&format!(r#"<section class="st-sec"><h3>{title}</h3>"#));
+                for key in keys {
+                    let t = st.cats.get(key).copied().unwrap_or_default();
+                    let cls = if leans.iter().any(|b| b.key == key) {
+                        " lean"
+                    } else if misses.iter().any(|b| b.key == key) {
+                        " miss"
+                    } else {
+                        ""
+                    };
+                    let (w, num) = match t.rate() {
+                        Some(r) => (pct(r), format!("{}/{}", t.found, t.seen)),
+                        None => (0, "-".to_string()),
+                    };
+                    h.push_str(&format!(
                     r#"<div class="st-row{cls}"><span class="st-label">{}</span><span class="st-bar" style="--w:{w}%;--m:{}%"><i></i><b></b></span><span class="st-num">{num}</span></div>"#,
                     self.cat_label(key),
                     pct(overall)
                 ));
+                }
+                h.push_str("</section>");
             }
-            h.push_str("</section>");
+            h.push_str("</div>");
+            h.push_str(r#"<p class="st-note">BAR: HOW OFTEN YOU TAKE THAT KIND OF SET WHEN IT IS ON THE TABLE. LINE: YOUR OVERALL RATE. A SET IS PASSED OVER WHEN IT WAS OUT AND YOU TOOK A DIFFERENT ONE.</p>"#);
         }
-        h.push_str("</div>");
-        h.push_str(r#"<p class="st-note">BAR: HOW OFTEN YOU TAKE THAT KIND OF SET WHEN IT IS ON THE TABLE. LINE: YOUR OVERALL RATE. A SET IS PASSED OVER WHEN IT WAS OUT AND YOU TOOK A DIFFERENT ONE.</p>"#);
-        h.push_str(&self.profile_speed_html(&SECTIONS));
         h.push_str(&format!(
-            r#"<div class="st-actions"><button class="btn btn-primary" type="button" data-act="stats">BACK TO THE TABLE</button><button class="btn" type="button" data-act="stats-reset">{}</button></div>"#,
-            if self.reset_armed { "SURE? TAP AGAIN" } else { "RESET PROFILE" }
+            r#"<div class="st-actions"><button class="btn btn-primary" type="button" data-act="stats">{}</button><button class="btn" type="button" data-act="stats-reset">{}</button></div>"#,
+            if speed_mode { "BACK TO THE DRILL" } else { "BACK TO THE TABLE" },
+            match (self.reset_armed, speed_mode) {
+                (true, _) => "SURE? TAP AGAIN",
+                (false, true) => "RESET DRILL STATS",
+                (false, false) => "RESET TABLE STATS",
+            }
         ));
         self.els.stats_body.set_inner_html(&h);
     }
@@ -2219,6 +2247,7 @@ impl App {
 
     fn speed_new_round(&mut self) {
         self.cancel_pending();
+        self.clear_fx();
         self.locked = false;
         self.drag = None;
         let mut rng = Rng::new(dom::random_seed());
@@ -2519,7 +2548,7 @@ impl App {
     /// A FIFA-style radar: one axis per kind of set, table take rate and
     /// drill accuracy drawn as two polygons over it. Empty until either has
     /// seen a set.
-    fn radar_html(&self) -> String {
+    fn radar_html(&self, show_table: bool, show_drill: bool) -> String {
         // Opposite axes (i and i + 4) are an attribute's same and mixed sides.
         const AXES: [(&str, &str, &[&str]); 8] = [
             ("SAME", "COUNT", &["n0", "n1", "n2"]),
@@ -2555,8 +2584,8 @@ impl App {
                 (n > 0).then(|| ok as f64 / n as f64)
             })
             .collect();
-        let has_table = table.iter().any(Option::is_some);
-        let has_drill = drill.iter().any(Option::is_some);
+        let has_table = show_table && table.iter().any(Option::is_some);
+        let has_drill = show_drill && drill.iter().any(Option::is_some);
         if !has_table && !has_drill {
             return String::new();
         }
@@ -2583,7 +2612,11 @@ impl App {
                         v.map(|x| format!("{}%", (x * 100.0).round() as u32))
                             .unwrap_or_else(|| "no data".into())
                     };
-                    format!("{a} {b}: table {}, drill {}", pct(t), pct(d))
+                    match (has_table, has_drill) {
+                        (true, false) => format!("{a} {b}: {}", pct(t)),
+                        (false, true) => format!("{a} {b}: {}", pct(d)),
+                        _ => format!("{a} {b}: table {}, drill {}", pct(t), pct(d)),
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("; ")
@@ -2645,7 +2678,7 @@ impl App {
             } else {
                 0.0
             };
-            let dim = table[i].is_none() && drill[i].is_none();
+            let dim = !(has_table && table[i].is_some()) && !(has_drill && drill[i].is_some());
             h.push_str(&format!(
                 r#"<text class="radar-label{}" x="{lx:.1}" y="{:.1}" text-anchor="{anchor}"><tspan x="{lx:.1}">{a}</tspan><tspan x="{lx:.1}" dy="12">{b}</tspan></text>"#,
                 if dim { " dim" } else { "" },
@@ -2668,6 +2701,102 @@ impl App {
         }
         h.push_str("</figcaption></figure>");
         h
+    }
+
+    // ---------- round-end effects ----------
+
+    /// Drops any finished or running full-screen effect.
+    fn clear_fx(&self) {
+        if let Ok(list) = dom::document().query_selector_all(".fx") {
+            for i in 0..list.length() {
+                if let Some(n) = list.get(i) {
+                    if let Ok(el) = n.dyn_into::<Element>() {
+                        el.remove();
+                    }
+                }
+            }
+        }
+    }
+
+    fn spawn_fx(&self, class: &str, inner: &str) {
+        self.clear_fx();
+        let doc = dom::document();
+        let Ok(el) = doc.create_element("div") else {
+            return;
+        };
+        el.set_class_name(&format!("fx {class}"));
+        let _ = el.set_attribute("aria-hidden", "true");
+        el.set_inner_html(inner);
+        if let Some(body) = doc.body() {
+            let _ = body.append_child(&el);
+        }
+    }
+
+    /// A new best: confetti in the palette rains over the results card.
+    fn confetti(&self) {
+        let mut rng = Rng::new(dom::random_seed());
+        let colours = [
+            "var(--p0)",
+            "var(--p1)",
+            "var(--p2)",
+            "var(--p3)",
+            "var(--good)",
+        ];
+        let mut h = String::with_capacity(120 * 150);
+        for _ in 0..120 {
+            h.push_str(&format!(
+                r#"<i style="--x:{}%;--dx:{}px;--d:{}ms;--t:{}ms;--c:{};--r:{}deg;--w:{}px;--h:{}px"></i>"#,
+                rng.below(100),
+                rng.below(240) as i32 - 120,
+                rng.below(900),
+                2200 + rng.below(1400),
+                colours[rng.below(colours.len())],
+                rng.below(1440) as i32 - 720,
+                6 + rng.below(6),
+                10 + rng.below(10)
+            ));
+        }
+        self.spawn_fx("confetti", &h);
+    }
+
+    /// Not your best: a red wash drips down over the screen and fades,
+    /// gun-barrel style.
+    fn bleed(&self) {
+        let mut rng = Rng::new(dom::random_seed());
+        // Six hanging drops of uneven width: round bottoms, narrow cusps between.
+        let n = 6;
+        let mut cuts = vec![0.0];
+        for i in 1..n {
+            cuts.push(100.0 * i as f64 / n as f64 + rng.below(9) as f64 - 4.0);
+        }
+        cuts.push(100.0);
+        let ridge = |rng: &mut Rng| 64.0 + rng.below(8) as f64;
+        let mut d = String::from("M0 0 H100");
+        let mut y_right = ridge(&mut rng);
+        d.push_str(&format!(" V{y_right:.1}"));
+        for i in (0..n).rev() {
+            let (xa, xb) = (cuts[i], cuts[i + 1]);
+            let w = xb - xa;
+            let xm = xa + w * (0.4 + rng.below(21) as f64 / 100.0);
+            let yt = 80.0 + rng.below(16) as f64;
+            let y_left = ridge(&mut rng);
+            // Down the right side into the drop, then up the left side.
+            d.push_str(&format!(
+                " C{xb:.1} {:.1} {:.1} {yt:.1} {xm:.1} {yt:.1} C{:.1} {yt:.1} {xa:.1} {:.1} {xa:.1} {y_left:.1}",
+                yt - (yt - y_right) * 0.25,
+                xm + w * 0.32,
+                xm - w * 0.32,
+                yt - (yt - y_left) * 0.25
+            ));
+            y_right = y_left;
+        }
+        d.push_str(" Z");
+        self.spawn_fx(
+            "bleed",
+            &format!(
+                r#"<svg class="bleed-svg" viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false"><path d="{d}"/></svg>"#
+            ),
+        );
     }
 
     // ---------- wrong swipe review ----------
