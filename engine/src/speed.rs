@@ -71,17 +71,22 @@ pub fn deal_trial(rng: &mut Rng) -> Trial {
     }
 }
 
+/// Which attributes break the rule, in attribute order (number, shape,
+/// colour, shading). All false for a set.
+pub fn broken_attrs(a: Card, b: Card, c: Card) -> [bool; 4] {
+    let (x, y, z) = (a.attrs(), b.attrs(), c.attrs());
+    let mut out = [false; 4];
+    for i in 0..4 {
+        let same = x[i] == y[i] && y[i] == z[i];
+        let diff = x[i] != y[i] && y[i] != z[i] && x[i] != z[i];
+        out[i] = !(same || diff);
+    }
+    out
+}
+
 /// Three of the four attributes follow the rule.
 fn near_miss(a: Card, b: Card, c: Card) -> bool {
-    let (x, y, z) = (a.attrs(), b.attrs(), c.attrs());
-    let ok = (0..4)
-        .filter(|&i| {
-            let same = x[i] == y[i] && y[i] == z[i];
-            let diff = x[i] != y[i] && y[i] != z[i] && x[i] != z[i];
-            same || diff
-        })
-        .count();
-    ok == 3
+    broken_attrs(a, b, c).iter().filter(|&&x| x).count() == 1
 }
 
 /// A full round of triples.
@@ -98,6 +103,11 @@ pub struct Answer {
     pub correct: bool,
     pub is_set: bool,
     pub near: bool,
+    /// The triple itself, so wrong swipes can be reviewed. Absent in logs
+    /// saved before this was kept.
+    pub cards: Option<[Card; 3]>,
+    /// Round the answer came from, counting from 1; 0 when unknown.
+    pub round: u32,
 }
 
 #[derive(Clone, Default, Debug, PartialEq)]
@@ -163,6 +173,8 @@ impl SpeedStats {
             correct,
             is_set: trial.is_set,
             near: trial.near,
+            cards: Some(trial.cards),
+            round: self.rounds + 1,
         });
         if self.log.len() > LOG_CAP {
             let extra = self.log.len() - LOG_CAP;
@@ -222,6 +234,14 @@ impl SpeedStats {
 
     pub fn far_misses(&self) -> Reading {
         reading(self.log.iter().filter(|a| !a.is_set && !a.near))
+    }
+
+    /// Wrong swipes whose cards were kept, newest first.
+    pub fn misses(&self) -> impl Iterator<Item = &Answer> {
+        self.log
+            .iter()
+            .rev()
+            .filter(|a| !a.correct && a.cards.is_some())
     }
 }
 
@@ -291,6 +311,19 @@ mod tests {
         st.record(&set, 700, false);
         st.record(&near, 1500, false);
         assert_eq!(st.overall().n, 4);
+        let misses: Vec<&Answer> = st.misses().collect();
+        assert_eq!(misses.len(), 2);
+        assert_eq!(misses[0].cards, Some(near.cards));
+        assert_eq!(misses[1].cards, Some(set.cards));
+        assert!(misses.iter().all(|a| a.round == 1));
+        assert_eq!(
+            broken_attrs(set.cards[0], set.cards[1], set.cards[2]),
+            [false; 4]
+        );
+        assert_eq!(
+            broken_attrs(near.cards[0], near.cards[1], near.cards[2]),
+            [true, false, false, false]
+        );
         assert_eq!(st.overall().correct, 2);
         assert_eq!(st.rt_percentile(0.5), Some(1100));
         let d1 = st.for_key("d1");
@@ -310,5 +343,6 @@ mod tests {
             st.record(&set, 800, true);
         }
         assert_eq!(st.log.len(), LOG_CAP);
+        assert_eq!(st.log.last().unwrap().round, 3);
     }
 }

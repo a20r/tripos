@@ -49,7 +49,9 @@ Three modes, chosen under **OPTIONS** at the bottom of the screen (`O` opens it)
   gains a Speed Drill section: accuracy, median and 90th percentile reaction
   time, pace (correct answers per ten seconds), how often you swipe sets
   away, how often near misses fool you, and which kinds of set you spot
-  quickest and slowest.
+  quickest and slowest. A card pile under those verdicts opens a full-screen
+  review of every wrong swipe, newest first and grouped by round, one triple
+  per row with the reason it was or was not a set.
 
 Three themes, also under **OPTIONS** (`T` cycles them):
 
@@ -67,7 +69,10 @@ attributes differ, all one colour or mixed, and the same for shape, count and
 shading) how often you take it when it is on the table, which kinds you lean
 toward, which you tend to miss, and which you find fastest. A set counts as
 passed over when it was out and you took a different one, or you dealt while
-it was out. The profile is kept on the device and can be reset from the panel.
+it was out. A radar at the top of the report has one axis per kind of set
+(same or mixed count, shape, colour and shading) with your table take rate
+and your drill accuracy drawn over it as two shapes. The profile is kept on
+the device and can be reset from the panel.
 
 The choice of theme is remembered and applied before the first paint. Games in
 progress are saved too.

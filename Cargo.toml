@@ -29,6 +29,7 @@ features = [
   "CssStyleDeclaration",
   "Document",
   "DomTokenList",
+  "DomRect",
   "Element",
   "Event",
   "EventTarget",

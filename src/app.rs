@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::rc::{Rc, Weak};
 
 use tripos_engine::speed::{self, SpeedStats, Trial};
-use tripos_engine::{daily, Card, Claim, Game, Rng, Stats};
+use tripos_engine::{daily, Card, Claim, Game, Rng, Signature, Stats};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -388,6 +388,9 @@ struct Els {
     table_wrap: HtmlElement,
     stats_panel: HtmlElement,
     stats_body: HtmlElement,
+    misses: HtmlElement,
+    misses_list: HtmlElement,
+    misses_close: HtmlButtonElement,
     options_btn: HtmlButtonElement,
     options: HtmlElement,
     options_scrim: HtmlElement,
@@ -448,6 +451,8 @@ pub struct App {
     stats: Stats,
     /// The table is flipped over to show the play profile.
     stats_open: bool,
+    /// The full-screen review of wrong speed swipes is showing.
+    misses_open: bool,
     /// Reset asks for a second tap.
     reset_armed: bool,
     /// The options sheet is up over the footer.
@@ -485,6 +490,9 @@ pub fn boot() {
         options_scrim: dom::el("options-scrim"),
         options_summary: dom::el("options-summary"),
         stats_body: dom::el("stats-body"),
+        misses: dom::el("misses"),
+        misses_list: dom::el("misses-list"),
+        misses_close: dom::btn("misses-close"),
         new_game: dom::btn("new-game"),
         seg_players: dom::el("seg-players"),
         mode_btns: [
@@ -567,6 +575,7 @@ pub fn boot() {
         stats_open: false,
         reset_armed: false,
         options_open: false,
+        misses_open: false,
         online: Online::idle(),
         dead_nets: Vec::new(),
         speed: Speed::idle(),
@@ -1478,6 +1487,8 @@ impl App {
             "shuffle" => self.shuffle(),
             "stats" => self.toggle_stats(),
             "stats-reset" => self.reset_stats(),
+            "misses" => self.open_misses(btn),
+            "misses-close" => self.close_misses(),
             "options" => self.toggle_options(),
             "options-close" => self.close_options(),
             "new" => self.new_game(),
@@ -1521,7 +1532,9 @@ impl App {
         let k = key.to_ascii_lowercase();
         match k.as_str() {
             "escape" => {
-                if self.options_open {
+                if self.misses_open {
+                    self.close_misses();
+                } else if self.options_open {
                     self.close_options();
                 } else if self.stats_open {
                     self.close_stats();
@@ -2001,6 +2014,7 @@ impl App {
         if !self.stats_open {
             return;
         }
+        self.close_misses();
         self.stats_open = false;
         self.reset_armed = false;
         dom::set_class(&self.els.table_wrap, "flipped", false);
@@ -2094,6 +2108,7 @@ impl App {
         let mut h = String::with_capacity(6000);
         h.push_str(r#"<p class="st-kicker">WALLACE CORP.&nbsp;&middot;&nbsp;PLAYER PROFILE</p>"#);
         h.push_str(r#"<h2 class="st-title">BASELINE REPORT</h2>"#);
+        h.push_str(&self.radar_html());
         h.push_str(r#"<h3 class="st-h">TABLE PLAY&nbsp;&middot;&nbsp;SOLO AND DAILY</h3>"#);
         if st.found == 0 {
             h.push_str(r#"<p class="st-sum">NO SETS ON RECORD YET</p>"#);
@@ -2452,6 +2467,14 @@ impl App {
             }
         ));
         h.push_str("</div>");
+        let wrong = st.misses().count();
+        if wrong > 0 {
+            h.push_str(&format!(
+                r#"<button class="pile" type="button" data-act="misses" aria-label="Review the {wrong} triples you swiped wrong"><span class="pile-icon" aria-hidden="true"><i></i><i></i><i></i></span><span class="pile-text"><b>{wrong} WRONG {}</b><small>TAP TO FLIP THROUGH {}</small></span></button>"#,
+                if wrong == 1 { "SWIPE" } else { "SWIPES" },
+                if wrong == 1 { "IT" } else { "THEM" }
+            ));
+        }
         let max_p50 = readings
             .iter()
             .filter_map(|(_, r)| r.p50)
@@ -2489,6 +2512,264 @@ impl App {
         h.push_str(r#"<p class="st-note">BAR: MEDIAN TIME TO SPOT THAT KIND OF SET IN THE DRILL, LONGER IS SLOWER. PERCENT: HOW OFTEN YOU SWIPED RIGHT ON IT.</p>"#);
         h.push_str("</section>");
         h
+    }
+
+    // ---------- skill radar ----------
+
+    /// A FIFA-style radar: one axis per kind of set, table take rate and
+    /// drill accuracy drawn as two polygons over it. Empty until either has
+    /// seen a set.
+    fn radar_html(&self) -> String {
+        // Opposite axes (i and i + 4) are an attribute's same and mixed sides.
+        const AXES: [(&str, &str, &[&str]); 8] = [
+            ("SAME", "COUNT", &["n0", "n1", "n2"]),
+            ("SAME", "SHAPE", &["s0", "s1", "s2"]),
+            ("SAME", "COLOUR", &["c0", "c1", "c2"]),
+            ("SAME", "SHADING", &["h0", "h1", "h2"]),
+            ("MIXED", "COUNT", &["nx"]),
+            ("MIXED", "SHAPE", &["sx"]),
+            ("MIXED", "COLOUR", &["cx"]),
+            ("MIXED", "SHADING", &["hx"]),
+        ];
+        const CX: f64 = 170.0;
+        const CY: f64 = 165.0;
+        const R: f64 = 108.0;
+
+        let table: Vec<Option<f64>> = AXES
+            .iter()
+            .map(|(_, _, keys)| {
+                let (found, seen) = keys
+                    .iter()
+                    .filter_map(|k| self.stats.cats.get(*k))
+                    .fold((0u32, 0u32), |(f, s), t| (f + t.found, s + t.seen));
+                (seen > 0).then(|| found as f64 / seen as f64)
+            })
+            .collect();
+        let drill: Vec<Option<f64>> = AXES
+            .iter()
+            .map(|(_, _, keys)| {
+                let (ok, n) = keys
+                    .iter()
+                    .map(|k| self.speed_stats.for_key(k))
+                    .fold((0u32, 0u32), |(c, n), r| (c + r.correct, n + r.n));
+                (n > 0).then(|| ok as f64 / n as f64)
+            })
+            .collect();
+        let has_table = table.iter().any(Option::is_some);
+        let has_drill = drill.iter().any(Option::is_some);
+        if !has_table && !has_drill {
+            return String::new();
+        }
+
+        let angle = |i: usize| (-90.0 + 45.0 * i as f64).to_radians();
+        let point = |i: usize, v: f64| {
+            let a = angle(i);
+            format!("{:.1},{:.1}", CX + R * v * a.cos(), CY + R * v * a.sin())
+        };
+        let ring = |v: f64| (0..8).map(|i| point(i, v)).collect::<Vec<_>>().join(" ");
+        let avg = |vals: &[Option<f64>]| {
+            let have: Vec<f64> = vals.iter().flatten().copied().collect();
+            (have.iter().sum::<f64>() / have.len().max(1) as f64 * 100.0).round() as u32
+        };
+
+        let mut h = String::with_capacity(4000);
+        h.push_str(r#"<figure class="radar-wrap">"#);
+        h.push_str(&format!(
+            r#"<svg class="radar" viewBox="0 0 340 330" role="img" aria-label="Skill radar: {}">"#,
+            AXES.iter()
+                .zip(table.iter().zip(drill.iter()))
+                .map(|((a, b, _), (t, d))| {
+                    let pct = |v: &Option<f64>| {
+                        v.map(|x| format!("{}%", (x * 100.0).round() as u32))
+                            .unwrap_or_else(|| "no data".into())
+                    };
+                    format!("{a} {b}: table {}, drill {}", pct(t), pct(d))
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+        for v in [0.25, 0.5, 0.75, 1.0] {
+            h.push_str(&format!(
+                r#"<polygon class="radar-grid" points="{}"/>"#,
+                ring(v)
+            ));
+        }
+        for i in 0..8 {
+            let a = angle(i);
+            h.push_str(&format!(
+                r#"<line class="radar-spoke" x1="{CX}" y1="{CY}" x2="{:.1}" y2="{:.1}"/>"#,
+                CX + R * a.cos(),
+                CY + R * a.sin()
+            ));
+        }
+        for (cls, vals, on) in [
+            ("radar-table", &table, has_table),
+            ("radar-drill", &drill, has_drill),
+        ] {
+            if !on {
+                continue;
+            }
+            let pts = (0..8)
+                .map(|i| point(i, vals[i].unwrap_or(0.0)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            h.push_str(&format!(
+                r#"<polygon class="radar-shape {cls}" points="{pts}"/>"#
+            ));
+            for (i, v) in vals.iter().enumerate() {
+                if let Some(v) = v {
+                    let (x, y) = {
+                        let a = angle(i);
+                        (CX + R * v * a.cos(), CY + R * v * a.sin())
+                    };
+                    h.push_str(&format!(
+                        r#"<circle class="radar-dot {cls}" cx="{x:.1}" cy="{y:.1}" r="3.5"/>"#
+                    ));
+                }
+            }
+        }
+        for (i, (a, b, _)) in AXES.iter().enumerate() {
+            let ang = angle(i);
+            let (lx, ly) = (CX + (R + 22.0) * ang.cos(), CY + (R + 22.0) * ang.sin());
+            let anchor = if ang.cos().abs() < 0.01 {
+                "middle"
+            } else if ang.cos() > 0.0 {
+                "start"
+            } else {
+                "end"
+            };
+            let dy = if ang.sin() < -0.9 {
+                -8.0
+            } else if ang.sin() > 0.9 {
+                10.0
+            } else {
+                0.0
+            };
+            let dim = table[i].is_none() && drill[i].is_none();
+            h.push_str(&format!(
+                r#"<text class="radar-label{}" x="{lx:.1}" y="{:.1}" text-anchor="{anchor}"><tspan x="{lx:.1}">{a}</tspan><tspan x="{lx:.1}" dy="12">{b}</tspan></text>"#,
+                if dim { " dim" } else { "" },
+                ly + dy - 2.0
+            ));
+        }
+        h.push_str("</svg>");
+        h.push_str(r#"<figcaption class="radar-legend">"#);
+        if has_table {
+            h.push_str(&format!(
+                r#"<span class="radar-key radar-table"><i></i>TABLE TAKE RATE{MIDDOT}<b>{}</b></span>"#,
+                avg(&table)
+            ));
+        }
+        if has_drill {
+            h.push_str(&format!(
+                r#"<span class="radar-key radar-drill"><i></i>DRILL ACCURACY{MIDDOT}<b>{}</b></span>"#,
+                avg(&drill)
+            ));
+        }
+        h.push_str("</figcaption></figure>");
+        h
+    }
+
+    // ---------- wrong swipe review ----------
+
+    /// Grows the review out of the pile button to fill the screen.
+    fn open_misses(&mut self, from: &Element) {
+        if self.misses_open {
+            return;
+        }
+        self.render_misses();
+        let r = from.get_bounding_client_rect();
+        let vw = dom::window()
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0)
+            .max(1.0);
+        let scale = (r.width() / vw).clamp(0.12, 0.6);
+        let m = &self.els.misses;
+        dom::set_var(m, "--ox", &format!("{:.0}px", r.x() + r.width() / 2.0));
+        dom::set_var(m, "--oy", &format!("{:.0}px", r.y() + r.height() / 2.0));
+        dom::set_var(m, "--os", &format!("{scale:.3}"));
+        // Let the new origin land before the transition starts.
+        let _ = m.offset_width();
+        dom::set_class(m, "open", true);
+        let _ = m.set_attribute("aria-hidden", "false");
+        self.els.misses_list.set_scroll_top(0);
+        self.misses_open = true;
+        let _ = self.els.misses_close.focus();
+        self.announce("Wrong swipes shown.");
+    }
+
+    fn close_misses(&mut self) {
+        if !self.misses_open {
+            return;
+        }
+        self.misses_open = false;
+        dom::set_class(&self.els.misses, "open", false);
+        let _ = self.els.misses.set_attribute("aria-hidden", "true");
+        if let Ok(Some(pile)) = self.els.stats_body.query_selector(".pile") {
+            if let Ok(pile) = pile.dyn_into::<HtmlElement>() {
+                let _ = pile.focus();
+            }
+        }
+    }
+
+    /// One row per wrong swipe, newest first, grouped by round.
+    fn render_misses(&self) {
+        const ATTRS: [&str; 4] = ["NUMBER", "SHAPE", "COLOUR", "SHADING"];
+        let mut h = String::with_capacity(20_000);
+        let mut round = u32::MAX;
+        for a in self.speed_stats.misses() {
+            let Some(cards) = a.cards else { continue };
+            if a.round != round {
+                round = a.round;
+                h.push_str(&format!(
+                    r#"<h3 class="miss-round">{}</h3>"#,
+                    if round == 0 {
+                        "EARLIER".to_string()
+                    } else {
+                        format!("ROUND {round}")
+                    }
+                ));
+            }
+            let why = if a.is_set {
+                Signature::of(cards[0], cards[1], cards[2])
+                    .categories()
+                    .iter()
+                    .map(|k| self.cat_label(k))
+                    .collect::<Vec<_>>()
+                    .join(MIDDOT)
+            } else {
+                let broken: Vec<&str> = speed::broken_attrs(cards[0], cards[1], cards[2])
+                    .iter()
+                    .zip(ATTRS)
+                    .filter(|(b, _)| **b)
+                    .map(|(_, n)| n)
+                    .collect();
+                let verb = if broken.len() == 1 { "BREAKS" } else { "BREAK" };
+                let tag = if a.near {
+                    format!("NEAR MISS{MIDDOT}")
+                } else {
+                    String::new()
+                };
+                format!("{tag}{} {verb} IT", broken.join(" AND "))
+            };
+            h.push_str(&format!(
+                r#"<article class="miss-row {}"><div class="miss-trio">{}</div><p class="miss-meta"><b>{}</b>{MIDDOT}YOU SWIPED {}{MIDDOT}{}<br><span class="miss-why">{why}</span></p></article>"#,
+                if a.is_set { "was-set" } else { "not-set" },
+                cards
+                    .iter()
+                    .map(|c| format!(r#"<div class="miss-face" data-card="{}">{}</div>"#, c.0, cards::face(*c)))
+                    .collect::<String>(),
+                if a.is_set { "A SET" } else { "NOT A SET" },
+                if a.is_set { "LEFT" } else { "RIGHT" },
+                fmt_tenths(a.ms)
+            ));
+        }
+        if h.is_empty() {
+            h.push_str(r#"<p class="st-note">NO WRONG SWIPES ON RECORD.</p>"#);
+        }
+        self.els.misses_list.set_inner_html(&h);
     }
 
     // ---------- deferred work ----------

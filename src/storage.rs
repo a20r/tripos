@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tripos_engine::speed::{Answer, SpeedStats};
-use tripos_engine::{Stats, Tally};
+use tripos_engine::{Card, Stats, Tally};
 
 pub const THEME_KEY: &str = "tripos.theme";
 pub const MODE_KEY: &str = "tripos.mode";
@@ -50,6 +50,15 @@ pub struct AnswerSave {
     pub set: bool,
     #[serde(default)]
     pub near: bool,
+    /// The three card codes; empty when the entry predates keeping them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub c: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub r: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -78,6 +87,10 @@ impl SpeedSave {
                     ok: a.correct,
                     set: a.is_set,
                     near: a.near,
+                    c: a.cards
+                        .map(|cs| cs.iter().map(|c| c.0).collect())
+                        .unwrap_or_default(),
+                    r: a.round,
                 })
                 .collect(),
         }
@@ -100,6 +113,14 @@ impl SpeedSave {
                     correct: a.ok,
                     is_set: a.set,
                     near: a.near,
+                    cards: match a.c.as_slice() {
+                        [x, y, z] => {
+                            let cs = [Card(*x), Card(*y), Card(*z)];
+                            cs.iter().all(|c| c.is_valid()).then_some(cs)
+                        }
+                        _ => None,
+                    },
+                    round: a.r,
                 })
                 .collect(),
         }
