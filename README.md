@@ -84,6 +84,15 @@ Keys for desktop play: letters on the `qwerty` rows pick cards, `H` hint,
 `D` deal, `N` new game, `R` rules, `1` to `4` call a set in Party, `Esc`
 clears the selection.
 
+## Offline
+
+The site is a progressive web app. A service worker precaches the page, the
+stylesheet, the fonts, the icons and the WebAssembly module on the first
+online visit, so later visits open and play with no network at all, including
+from a home screen icon. Online mode still needs a connection for the other
+player. A new deploy is picked up on the next online visit and takes effect
+the visit after that.
+
 ## Layout
 
 - `engine/`: the rules (`is_set`, `third`, `find_sets`), the deck and table

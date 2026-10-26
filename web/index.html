@@ -12,11 +12,12 @@
   <meta name="description" content="Tripos: a Blade Runner themed SET card game for phones and tablets. Solo, daily and party modes. Rust and WebAssembly.">
   <title>TRIPOS</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=13">
-  <link rel="modulepreload" href="pkg/tripos.js?v=13">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preload" href="fonts/orbitron.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/share-tech-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="style.css?v=14">
+  <link rel="modulepreload" href="pkg/tripos.js?v=14">
 </head>
 <body>
   <div class="rain" aria-hidden="true"></div>
@@ -195,10 +196,16 @@
   </main>
 
   <script type="module">
-    import init, * as tripos from './pkg/tripos.js?v=13';
+    import init, * as tripos from './pkg/tripos.js?v=14';
     window.Tripos = tripos;
     // The module path carries the same version as the glue so a cached binary never pairs with new glue.
-    init({ module_or_path: './pkg/tripos_bg.wasm?v=13' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    init({ module_or_path: './pkg/tripos_bg.wasm?v=14' }).catch(function (e) { console.error('Tripos failed to start', e); });
+    // The service worker precaches the whole game, so later visits need no network at all.
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function (e) { console.warn('offline cache unavailable', e); });
+      });
+    }
   </script>
 </body>
 </html>
