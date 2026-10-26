@@ -19,4 +19,13 @@ find dist -mindepth 1 -delete
 mkdir -p dist/pkg
 cp -r web/. dist/
 wasm-bindgen --target web --no-typescript --out-dir dist/pkg "$WASM"
+
+# Stamp the service worker so every build installs into its own cache.
+BUILD="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)-$(date -u +%s)"
+sed -i.bak "s/__BUILD__/$BUILD/" dist/sw.js && rm -f dist/sw.js.bak
+if grep -q "__BUILD__" dist/sw.js || ! grep -q "$BUILD" dist/sw.js; then
+  echo "build.sh: dist/sw.js was not stamped with the build id" >&2
+  exit 1
+fi
+echo "service worker build id: $BUILD"
 ls -la dist/pkg
